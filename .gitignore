@@ -1,0 +1,14 @@
+.DS_Store
+DerivedData/
+build/
+dist/
+.tmp/
+.cache-home/
+.clang-module-cache/
+.swift-module-cache/
+/tmp/
+*.mobileprovision
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+Vendor/Frameworks/
+Vendor/Models/
