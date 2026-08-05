@@ -1,4 +1,5 @@
 import XCTest
+import AVFoundation
 @testable import VoicePolishApp
 
 final class VoicePolishKeyboardTests: XCTestCase {
@@ -43,6 +44,52 @@ final class VoicePolishKeyboardTests: XCTestCase {
         XCTAssertEqual(response.outcome, .text)
         XCTAssertEqual(response.text, "hello")
         XCTAssertNil(response.errorCode)
+    }
+
+    func testDraftResponseAndConfirmWireRoundtrip() throws {
+        let jobID = UUID()
+        let draft = VoiceDraft(
+            id: jobID,
+            text: "我想去深圳",
+            candidateGroups: [
+                CandidateGroup(range: UTF16TextRange(location: 4, length: 1), alternatives: ["证"])
+            ]
+        )
+        let response = BridgeResponse.draft(draft, jobID: jobID)
+        XCTAssertEqual(response.outcome, .draft)
+        XCTAssertEqual(response.draft, draft)
+
+        let message = WireMessage(command: .confirmDraft, token: "test", jobID: jobID, draftText: draft.text)
+        let decoded = try JSONDecoder().decode(WireMessage.self, from: JSONEncoder().encode(message))
+        XCTAssertEqual(decoded.command, .confirmDraft)
+        XCTAssertEqual(decoded.jobID, jobID)
+        XCTAssertEqual(decoded.draftText, draft.text)
+    }
+
+    func testCandidateBuilderCreatesChineseReplacement() {
+        let draft = VoiceCandidateBuilder.makeDraft(
+            source: "我想去深圳",
+            hypotheses: [AppleSpeechHypothesis(text: "我想去深证", confidence: 0.8, rank: 0)]
+        )
+        XCTAssertEqual(draft?.candidateGroups.count, 1)
+        XCTAssertEqual(draft?.candidateGroups.first?.range, UTF16TextRange(location: 4, length: 1))
+        XCTAssertEqual(draft?.candidateGroups.first?.alternatives, ["证"])
+    }
+
+    func testCandidateBuilderUsesUTF16RangesForEmoji() {
+        let draft = VoiceCandidateBuilder.makeDraft(
+            source: "我😀去深圳",
+            hypotheses: [AppleSpeechHypothesis(text: "我😀去深证", confidence: 0.9, rank: 0)]
+        )
+        XCTAssertEqual(draft?.candidateGroups.first?.range, UTF16TextRange(location: 5, length: 1))
+    }
+
+    func testCandidateBuilderSkipsPunctuationOnlyDifference() {
+        let draft = VoiceCandidateBuilder.makeDraft(
+            source: "你好。",
+            hypotheses: [AppleSpeechHypothesis(text: "你好！", confidence: 0.8, rank: 0)]
+        )
+        XCTAssertNil(draft)
     }
 
     func testBridgeResponseErrorCode() {
@@ -403,7 +450,8 @@ final class VoicePolishKeyboardTests: XCTestCase {
         XCTAssertTrue(correct.contains("纠错") || correct.contains("识别错误"))
         XCTAssertTrue(coding.contains("编程") || coding.contains("标识符"))
         XCTAssertTrue(rewrite.contains("不要回答问题"))
-        XCTAssertTrue(ask.contains("最终结果") || ask.contains("指令"))
+        XCTAssertTrue(ask.contains("answer") || ask.contains("回复"))
+        XCTAssertTrue(ask.contains("对方") || ask.contains("发送"))
         XCTAssertNotEqual(correct, ask)
         XCTAssertEqual(PolishMode.correctOnly.temperature, 0.2, accuracy: 0.0001)
         XCTAssertEqual(PolishMode.askLLM.temperature, 0.5, accuracy: 0.0001)
@@ -444,6 +492,7 @@ final class VoicePolishKeyboardTests: XCTestCase {
         XCTAssertEqual(settings.mode.temperature, 0.2, accuracy: 0.0001)
     }
 
+    @MainActor
     func testCyclePolishModeOrderIncludesOff() {
         let defaults = UserDefaults.standard
         let keys = ["polish_mode", "polish_enabled"]
@@ -654,6 +703,292 @@ final class VoicePolishKeyboardTests: XCTestCase {
             pendingCount: 1
         )
         XCTAssertEqual(msg, "待插入…")
+    }
+
+    func testAskAnswerParserAcceptsJSONAndFencedJSON() throws {
+        let source = "老板说孩子发烧了，我该怎么安慰？"
+        let plain = try AskAnswerParser.parse(#"{"answer":"听起来很辛苦，多休息。"}"#, sourceText: source)
+        XCTAssertEqual(plain, "听起来很辛苦，多休息。")
+
+        let fenced = """
+        ```json
+        {"answer":"听起来真的很辛苦，照顾两个孩子确实比上班还累。小得现在好些了吗？你也要注意休息。","tone":"warm"}
+        ```
+        """
+        let parsed = try AskAnswerParser.parse(fenced, sourceText: source)
+        XCTAssertTrue(parsed.contains("听起来真的很辛苦"))
+        XCTAssertFalse(parsed.contains("tone"))
+    }
+
+    func testAskAnswerParserAcceptsPlainTextFallback() throws {
+        let source = "帮我礼貌拒绝加班"
+        let answer = try AskAnswerParser.parse("今晚家里有事，可能不方便加班，不好意思。", sourceText: source)
+        XCTAssertTrue(answer.contains("不方便加班"))
+    }
+
+    func testAskAnswerParserRejectsEmptyMalformedAndEcho() {
+        let source = "小得前两天发烧了基本上照顾他们两兄弟比上班还累老板这么说我应该怎么安慰比较好"
+        XCTAssertThrowsError(try AskAnswerParser.parse(#"{"answer":""}"#, sourceText: source))
+        XCTAssertThrowsError(try AskAnswerParser.parse(#"{"answer":}"#, sourceText: source))
+        XCTAssertThrowsError(try AskAnswerParser.parse("{not-json", sourceText: source))
+        XCTAssertThrowsError(try AskAnswerParser.parse(source, sourceText: source))
+        let echoedJSON = "{\"answer\":\"\(source)\"}"
+        XCTAssertThrowsError(try AskAnswerParser.parse(echoedJSON, sourceText: source))
+    }
+
+    func testAskAnswerParserMotivatingExampleIsNotEcho() throws {
+        let source = "小得前兩天發燒了基本上照顧他們兩兄弟比上班還累老闆這麼說我應該怎麼安慰比較好"
+        let candidate = "听起来真的很辛苦，照顾两个孩子确实比上班还累。小得现在好些了吗？你也要注意休息、保重身体。"
+        let payload = "{\"answer\":\"\(candidate)\"}"
+        let answer = try AskAnswerParser.parse(payload, sourceText: source)
+        XCTAssertEqual(answer, candidate)
+        XCTAssertFalse(AskAnswerParser.isEcho(answer, of: source))
+        XCTAssertTrue(AskAnswerParser.isEcho(source, of: source))
+    }
+
+    func testAskRetryabilityClassification() {
+        XCTAssertTrue(AskAnswerParser.isRetryable(PolishingError.timeout))
+        XCTAssertTrue(AskAnswerParser.isRetryable(PolishingError.invalidAskAnswer))
+        XCTAssertTrue(AskAnswerParser.isRetryable(PolishingError.httpError(429, "rate limit")))
+        XCTAssertTrue(AskAnswerParser.isRetryable(PolishingError.httpError(503, "busy")))
+        XCTAssertFalse(AskAnswerParser.isRetryable(PolishingError.invalidURL))
+        XCTAssertFalse(AskAnswerParser.isRetryable(PolishingError.missingAPIKey))
+        XCTAssertFalse(AskAnswerParser.isRetryable(PolishingError.httpError(401, "unauthorized")))
+        XCTAssertFalse(AskAnswerParser.isRetryable(PolishingError.httpError(400, "Unsupported model foo")))
+    }
+
+    func testAskModeSettingsDescriptionMentionsReply() {
+        XCTAssertTrue(PolishMode.askLLM.settingsDescription.contains("回复") || PolishMode.askLLM.settingsDescription.contains("发送"))
+    }
+
+    func testBridgeStatusAskFollowUpFlagsRoundtrip() throws {
+        let status = BridgeStatus(
+            state: .ready,
+            message: "追问已就绪",
+            polishEnabled: true,
+            polishMode: PolishMode.askLLM.rawValue,
+            askFollowUpAvailable: true,
+            askFollowUpArmed: true
+        )
+        let data = try JSONEncoder().encode(status)
+        let decoded = try JSONDecoder().decode(BridgeStatus.self, from: data)
+        XCTAssertEqual(decoded.askFollowUpAvailable, true)
+        XCTAssertEqual(decoded.askFollowUpArmed, true)
+    }
+
+    func testArmAskFollowUpWireCommandExists() throws {
+        let message = WireMessage(command: .armAskFollowUp, token: "test")
+        let data = try JSONEncoder().encode(message)
+        let decoded = try JSONDecoder().decode(WireMessage.self, from: data)
+        XCTAssertEqual(decoded.command, .armAskFollowUp)
+    }
+
+
+    // MARK: - Audio capture / Bluetooth route recovery
+
+    func testAudioPeakMeterHandlesInt16Min() {
+        let samples: [Int16] = [0, 1, -1, Int16.max, Int16.min]
+        let peak = AudioPeakMeter.normalizedPeak(samples: samples)
+        XCTAssertEqual(peak, 1.0, accuracy: 0.0001)
+        XCTAssertFalse(peak.isNaN)
+        XCTAssertFalse(peak.isInfinite)
+    }
+
+    func testAudioPeakMeterEmptyIsZero() {
+        XCTAssertEqual(AudioPeakMeter.normalizedPeak(samples: []), 0)
+    }
+
+    func testAudioRouteRecoveryPolicy() {
+        XCTAssertTrue(AudioRouteRecoveryPolicy.shouldCancelActiveCapture(isRecording: true))
+        XCTAssertFalse(AudioRouteRecoveryPolicy.shouldCancelActiveCapture(isRecording: false))
+
+        XCTAssertTrue(AudioRouteRecoveryPolicy.shouldRejectStart(isRecovering: true, isInputReady: true))
+        XCTAssertTrue(AudioRouteRecoveryPolicy.shouldRejectStart(isRecovering: false, isInputReady: false))
+        XCTAssertFalse(AudioRouteRecoveryPolicy.shouldRejectStart(isRecovering: false, isInputReady: true))
+
+        XCTAssertTrue(AudioRouteRecoveryPolicy.canRetry(attempt: 0, maxAttempts: 3))
+        XCTAssertTrue(AudioRouteRecoveryPolicy.canRetry(attempt: 2, maxAttempts: 3))
+        XCTAssertFalse(AudioRouteRecoveryPolicy.canRetry(attempt: 3, maxAttempts: 3))
+    }
+
+    func testAudioCaptureSinkRebuildsConverterAcrossFormats() throws {
+        let target = try XCTUnwrap(
+            AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: true)
+        )
+        let sink = AudioCaptureSink()
+        sink.configure(targetFormat: target)
+        sink.beginRecording()
+
+        // 48 kHz mono float input.
+        let format48 = try XCTUnwrap(
+            AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 1, interleaved: false)
+        )
+        let buffer48 = try XCTUnwrap(Self.makeSineBuffer(format: format48, frames: 4800, frequency: 440))
+        sink.ingest(buffer48)
+        let after48 = sink.snapshot()
+        XCTAssertFalse(after48.isEmpty, "expected PCM after 48 kHz buffer")
+
+        // Route change simulation: 16 kHz mono int16 input.
+        let format16 = try XCTUnwrap(
+            AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: true)
+        )
+        let buffer16 = try XCTUnwrap(Self.makeSineBuffer(format: format16, frames: 1600, frequency: 440))
+        sink.prepareForEngineAttach()
+        sink.ingest(buffer16)
+        let after16 = sink.snapshot()
+        XCTAssertGreaterThan(after16.count, after48.count, "PCM should continue growing after format change")
+
+        // Extreme samples should not trap on Int16.min abs overflow.
+        if let channel = buffer16.int16ChannelData {
+            channel[0][0] = Int16.min
+        }
+        sink.ingest(buffer16)
+        XCTAssertGreaterThanOrEqual(sink.latestLevel, 0)
+        XCTAssertLessThanOrEqual(sink.latestLevel, 1.0)
+
+        let finished = sink.finishRecording()
+        XCTAssertFalse(finished.isEmpty)
+        XCTAssertEqual(finished.count % 2, 0, "int16 PCM should be even byte count")
+    }
+
+
+    // MARK: - DeleteRepeatController
+
+    @MainActor
+    func testDeleteRepeatPressBeganDeletesOnceImmediately() async {
+        var count = 0
+        var feedbackCount = 0
+        let controller = DeleteRepeatController(
+            timing: DeleteRepeatTiming(
+                initialDelayNanoseconds: 200_000_000,
+                repeatIntervalNanoseconds: 50_000_000
+            ),
+            onDelete: { count += 1 }
+        )
+
+        feedbackCount += 1
+        controller.pressBegan()
+
+        XCTAssertEqual(count, 1)
+        XCTAssertEqual(feedbackCount, 1)
+        XCTAssertTrue(controller.isActive)
+        controller.cancel()
+    }
+
+    @MainActor
+    func testDeleteRepeatDuplicatePressBeganDoesNotStartMultipleLoops() async throws {
+        var count = 0
+        let controller = DeleteRepeatController(
+            timing: DeleteRepeatTiming(
+                initialDelayNanoseconds: 80_000_000,
+                repeatIntervalNanoseconds: 40_000_000
+            ),
+            onDelete: { count += 1 }
+        )
+
+        controller.pressBegan()
+        controller.pressBegan()
+        controller.pressBegan()
+        XCTAssertEqual(count, 1, "only the first pressBegan should delete immediately")
+
+        try await Task.sleep(nanoseconds: 220_000_000)
+        let afterHold = count
+        XCTAssertGreaterThanOrEqual(afterHold, 2)
+        // With a single loop, roughly 1 + floor((220-80)/40) ~= 4 deletes. Multiple loops would overshoot hard.
+        XCTAssertLessThanOrEqual(afterHold, 6)
+
+        controller.cancel()
+        let frozen = count
+        try await Task.sleep(nanoseconds: 120_000_000)
+        XCTAssertEqual(count, frozen)
+    }
+
+    @MainActor
+    func testDeleteRepeatCancelBeforeDelayPreventsRepeats() async throws {
+        var count = 0
+        let controller = DeleteRepeatController(
+            timing: DeleteRepeatTiming(
+                initialDelayNanoseconds: 150_000_000,
+                repeatIntervalNanoseconds: 40_000_000
+            ),
+            onDelete: { count += 1 }
+        )
+
+        controller.pressBegan()
+        XCTAssertEqual(count, 1)
+        try await Task.sleep(nanoseconds: 40_000_000)
+        controller.cancel()
+        XCTAssertFalse(controller.isActive)
+
+        try await Task.sleep(nanoseconds: 250_000_000)
+        XCTAssertEqual(count, 1)
+    }
+
+    @MainActor
+    func testDeleteRepeatHoldBeginsRepeatingThenCancelStops() async throws {
+        var count = 0
+        let controller = DeleteRepeatController(
+            timing: DeleteRepeatTiming(
+                initialDelayNanoseconds: 60_000_000,
+                repeatIntervalNanoseconds: 30_000_000
+            ),
+            onDelete: { count += 1 }
+        )
+
+        controller.pressBegan()
+        XCTAssertEqual(count, 1)
+
+        try await Task.sleep(nanoseconds: 160_000_000)
+        XCTAssertGreaterThanOrEqual(count, 3)
+
+        controller.pressEnded()
+        XCTAssertFalse(controller.isActive)
+        let frozen = count
+        try await Task.sleep(nanoseconds: 120_000_000)
+        XCTAssertEqual(count, frozen)
+    }
+
+    @MainActor
+    func testDeleteRepeatDeinitCancelsTask() async throws {
+        var count = 0
+        do {
+            let controller = DeleteRepeatController(
+                timing: DeleteRepeatTiming(
+                    initialDelayNanoseconds: 40_000_000,
+                    repeatIntervalNanoseconds: 25_000_000
+                ),
+                onDelete: { count += 1 }
+            )
+            controller.pressBegan()
+            XCTAssertEqual(count, 1)
+        }
+
+        let frozen = count
+        try await Task.sleep(nanoseconds: 180_000_000)
+        XCTAssertEqual(count, frozen, "deallocated controller must not keep deleting")
+    }
+
+    private static func makeSineBuffer(format: AVAudioFormat, frames: AVAudioFrameCount, frequency: Double) -> AVAudioPCMBuffer? {
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else { return nil }
+        buffer.frameLength = frames
+        let sampleRate = format.sampleRate
+        if format.commonFormat == .pcmFormatFloat32, let channels = buffer.floatChannelData {
+            let ptr = channels[0]
+            for i in 0..<Int(frames) {
+                let t = Double(i) / sampleRate
+                ptr[i] = Float(sin(2 * Double.pi * frequency * t) * 0.25)
+            }
+        } else if format.commonFormat == .pcmFormatInt16, let channels = buffer.int16ChannelData {
+            let ptr = channels[0]
+            for i in 0..<Int(frames) {
+                let t = Double(i) / sampleRate
+                let sample = sin(2 * Double.pi * frequency * t) * 0.25 * Double(Int16.max)
+                ptr[i] = Int16(clamping: Int(sample.rounded()))
+            }
+        } else {
+            return nil
+        }
+        return buffer
     }
 
 }

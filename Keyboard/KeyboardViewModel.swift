@@ -25,6 +25,12 @@ final class KeyboardViewModel: ObservableObject {
     @Published var polishMode: PolishMode = .default
     /// Chinese script preference mirrored from host app.
     @Published var chineseScript: ChineseScriptPreference = .default
+    /// Prior ask answer exists for serial follow-up.
+    @Published var askFollowUpAvailable = false
+    /// Next ask capture will include conversation history.
+    @Published var askFollowUpArmed = false
+    /// A not-yet-committed transcription shown to the host as marked text.
+    @Published private(set) var activeDraft: VoiceDraft?
 
     private let client = KeyboardBridgeClient()
     private var timer: Timer?
@@ -51,6 +57,14 @@ final class KeyboardViewModel: ObservableObject {
                     currentState = status.state
                     applyPolishFlag(from: status)
                     applyScriptFlag(from: status)
+                    applyAskFollowUpFlags(from: status)
+                    if status.state == .recording {
+                        // The keyboard process may have been recreated after a
+                        // missed touch-up. Never adopt an orphaned remote capture.
+                        _ = try? await client.send(.cancel)
+                        isRecording = false
+                        currentState = .ready
+                    }
                 } else {
                     currentState = .ready
                 }
@@ -68,8 +82,16 @@ final class KeyboardViewModel: ObservableObject {
 
     func disconnect() {
         stopTimer()
-        Task { await client.disconnect() }
+        holdStartState = .idle
+        isRecording = false
         isConnected = false
+        Task {
+            // Dismissing or switching keyboards can cancel UIKit tracking
+            // without a normal touch-up. Always clean up the remote capture
+            // before closing the bridge; cancel is safe when already idle.
+            _ = try? await client.send(.cancel)
+            await client.disconnect()
+        }
     }
 
     // MARK: - BiBi-style hold-to-record
@@ -134,10 +156,14 @@ final class KeyboardViewModel: ObservableObject {
                     currentState = .error
                 }
                 canRetry = true
-            case .text:
+            case .draft, .text:
                 break
             }
         } catch {
+            // The start command may have reached the companion even when its
+            // response was lost. Cancellation is idempotent and prevents an
+            // invisible recording from surviving the failed request.
+            _ = try? await client.send(.cancel)
             isConnected = false
             currentState = .inactive
             statusText = "请打开主应用并启动语音会话"
@@ -164,13 +190,16 @@ final class KeyboardViewModel: ObservableObject {
         do {
             let response = try await client.send(.finish)
             switch response.response.outcome {
-            case .text:
+            case .draft, .text:
                 // Legacy servers may still return text on finish.
                 currentState = .ready
                 statusText = readyPrompt
                 canRetry = false
                 return response.response.text
             case .error:
+                if response.response.status?.state == .recording {
+                    _ = try? await client.send(.cancel)
+                }
                 currentState = .error
                 statusText = response.response.message ?? "识别失败"
                 canRetry = true
@@ -186,6 +215,7 @@ final class KeyboardViewModel: ObservableObject {
                 return nil
             }
         } catch {
+            _ = try? await client.send(.cancel)
             currentState = .error
             statusText = "通信失败"
             canRetry = true
@@ -197,20 +227,71 @@ final class KeyboardViewModel: ObservableObject {
     func onSwipeCancel() async {
         _ = await waitForHoldStartToSettle()
         defer { holdStartState = .idle }
-        guard isRecording else {
-            // Start may have failed; just reset local UI.
-            stopTimer()
-            isRecording = false
-            currentState = isConnected ? .ready : .inactive
-            statusText = isConnected ? "已取消 · 按住说话" : "请打开主应用并启动语音会话"
-            return
-        }
         stopTimer()
         isRecording = false
-        _ = try? await client.send(.cancel)
-        currentState = .ready
-        statusText = "已取消 · 按住说话"
-        canRetry = false
+        // Always cancel remotely. Local state can be false when a start reply
+        // was lost, which is precisely when an orphaned capture must be stopped.
+        do {
+            let response = try await client.send(.cancel)
+            isConnected = true
+            currentState = response.response.status?.state == .inactive ? .inactive : .ready
+            statusText = currentState == .ready
+                ? "已取消 · 按住说话"
+                : "请打开主应用并启动语音会话"
+            canRetry = false
+        } catch {
+            isConnected = false
+            currentState = .inactive
+            statusText = "取消失败 · 请打开主应用"
+            canRetry = true
+        }
+    }
+
+    /// Replace one candidate span and shift following UTF-16 ranges. Invalid
+    /// host or bridge data is ignored rather than risking a malformed edit.
+    func selectCandidate(groupID: UUID, replacement: String) {
+        guard var draft = activeDraft,
+              let index = draft.candidateGroups.firstIndex(where: { $0.id == groupID }),
+              let range = stringRange(draft.candidateGroups[index].range, in: draft.text) else { return }
+        let oldLength = draft.candidateGroups[index].range.length
+        draft.text.replaceSubrange(range, with: replacement)
+        let delta = replacement.utf16.count - oldLength
+        draft.candidateGroups[index].range.length = replacement.utf16.count
+        for offset in draft.candidateGroups.indices where offset != index {
+            if draft.candidateGroups[offset].range.location > draft.candidateGroups[index].range.location {
+                draft.candidateGroups[offset].range.location += delta
+            }
+        }
+        activeDraft = draft
+    }
+
+    /// Confirm the displayed draft and wait for its ordered final result.
+    func confirmActiveDraft() async -> String? {
+        guard let draft = activeDraft else { return nil }
+        do {
+            let response = try await client.send(.confirmDraft, jobID: draft.id, draftText: draft.text)
+            guard response.response.outcome == .ok else {
+                statusText = response.response.message ?? "候选词确认失败"
+                return nil
+            }
+            activeDraft = nil
+            currentState = .polishing
+            statusText = response.response.status?.message ?? "处理中…"
+            return await pollForResult(jobID: draft.id)
+        } catch {
+            statusText = "通信失败"
+            return nil
+        }
+    }
+
+    func discardActiveDraft() {
+        activeDraft = nil
+    }
+
+    func abandonActiveDraft() async {
+        guard let draft = activeDraft else { return }
+        _ = try? await client.send(.abandonDraft, jobID: draft.id)
+        activeDraft = nil
     }
 
     /// Wait until a scheduled/running start attempt settles.
@@ -251,6 +332,7 @@ final class KeyboardViewModel: ObservableObject {
                 if let status = response.response.status {
                     currentState = status.state
                     applyScriptFlag(from: status)
+                    applyAskFollowUpFlags(from: status)
                 } else {
                     chineseScript = pref
                 }
@@ -259,7 +341,7 @@ final class KeyboardViewModel: ObservableObject {
                 }
             case .error, .unauthorized:
                 statusText = response.response.message ?? "繁简切换失败"
-            case .text:
+            case .draft, .text:
                 break
             }
         } catch {
@@ -292,16 +374,19 @@ final class KeyboardViewModel: ObservableObject {
                 if let status = response.response.status {
                     currentState = status.state
                     applyPolishFlag(from: status)
+                    applyAskFollowUpFlags(from: status)
                 } else {
                     polishEnabled = true
                     polishMode = mode
+                    askFollowUpAvailable = false
+                    askFollowUpArmed = false
                 }
                 if !isRecording, !isBusy {
                     statusText = response.response.message ?? readyPrompt
                 }
             case .error, .unauthorized:
                 statusText = response.response.message ?? "模式切换失败"
-            case .text:
+            case .draft, .text:
                 break
             }
         } catch {
@@ -324,15 +409,20 @@ final class KeyboardViewModel: ObservableObject {
                 if let status = response.response.status {
                     currentState = status.state
                     applyPolishFlag(from: status)
+                    applyAskFollowUpFlags(from: status)
                 } else {
                     polishEnabled = enabled
+                    if !enabled {
+                        askFollowUpAvailable = false
+                        askFollowUpArmed = false
+                    }
                 }
                 if !isRecording, !isBusy {
                     statusText = response.response.message ?? readyPrompt
                 }
             case .error, .unauthorized:
                 statusText = response.response.message ?? "润色开关失败"
-            case .text:
+            case .draft, .text:
                 break
             }
         } catch {
@@ -355,13 +445,14 @@ final class KeyboardViewModel: ObservableObject {
                 if let status = response.response.status {
                     currentState = status.state
                     applyPolishFlag(from: status)
+                    applyAskFollowUpFlags(from: status)
                 }
                 if !isRecording, !isBusy {
                     statusText = response.response.message ?? readyPrompt
                 }
             case .error, .unauthorized:
                 statusText = response.response.message ?? "模式切换失败"
-            case .text:
+            case .draft, .text:
                 break
             }
         } catch {
@@ -374,15 +465,48 @@ final class KeyboardViewModel: ObservableObject {
     func retryTranscription() async {
         canRetry = false
         lastFailed = false
+        // A failed start/finish can leave the companion recording even though the
+        // keyboard has already shown an error.  Retrying must first terminate
+        // that orphaned capture; merely reconnecting leaves the microphone on.
+        holdStartState = .idle
+        stopTimer()
+        isRecording = false
         await connect()
-        statusText = readyPrompt
-        currentState = isConnected ? .ready : .inactive
+        guard isConnected else {
+            currentState = .inactive
+            return
+        }
+
+        do {
+            let response = try await client.send(.cancel)
+            if let status = response.response.status {
+                applyPolishFlag(from: status)
+                applyScriptFlag(from: status)
+                applyAskFollowUpFlags(from: status)
+                currentState = status.state == .recording ? .error : status.state
+            } else {
+                currentState = .ready
+            }
+            statusText = currentState == .ready ? readyPrompt : (response.response.message ?? "重试失败")
+            canRetry = currentState != .ready
+        } catch {
+            isConnected = false
+            currentState = .inactive
+            statusText = "请打开主应用并启动语音会话"
+            canRetry = true
+        }
     }
 
     // MARK: - Private
 
     private var readyPrompt: String {
         let script = chineseScript.shortLabel
+        if polishEnabled, polishMode == .askLLM, askFollowUpArmed {
+            return "追问已就绪 · 按住说话 · \(script)"
+        }
+        if polishEnabled, polishMode == .askLLM, askFollowUpAvailable {
+            return "按住说话 · 问答 \(script) · 可追问"
+        }
         return polishEnabled
             ? "按住说话 · \(polishMode.shortLabel) \(script)"
             : "按住说话 · 润色关 \(script)"
@@ -404,14 +528,90 @@ final class KeyboardViewModel: ObservableObject {
         }
     }
 
+    private func applyAskFollowUpFlags(from status: BridgeStatus) {
+        if let available = status.askFollowUpAvailable {
+            askFollowUpAvailable = available
+        }
+        if let armed = status.askFollowUpArmed {
+            askFollowUpArmed = armed
+        }
+        if polishMode != .askLLM || !polishEnabled {
+            askFollowUpAvailable = false
+            askFollowUpArmed = false
+        }
+    }
+
+    private func stringRange(_ range: UTF16TextRange, in text: String) -> Range<String.Index>? {
+        let count = text.utf16.count
+        guard range.location <= count, range.length <= count - range.location else { return nil }
+        let start = String.Index(utf16Offset: range.location, in: text)
+        let end = String.Index(utf16Offset: range.location + range.length, in: text)
+        return start <= end ? start..<end : nil
+    }
+
+    func armAskFollowUp() async {
+        guard isConnected, !isRecording else { return }
+        do {
+            let response = try await client.send(.armAskFollowUp)
+            switch response.response.outcome {
+            case .ok:
+                if let status = response.response.status {
+                    applyPolishFlag(from: status)
+                    applyScriptFlag(from: status)
+                    applyAskFollowUpFlags(from: status)
+                    currentState = status.state == .recording ? .ready : status.state
+                }
+                askFollowUpArmed = true
+                statusText = response.response.message ?? readyPrompt
+            case .error, .unauthorized:
+                statusText = response.response.message ?? "无法追问"
+            case .draft, .text:
+                break
+            }
+        } catch {
+            statusText = "请打开主应用并启动语音会话"
+            isConnected = false
+        }
+    }
+
+    func clearAskConversation() async {
+        guard isConnected, !isRecording else { return }
+        do {
+            let response = try await client.send(.clearAskConversation)
+            if let status = response.response.status {
+                applyPolishFlag(from: status)
+                applyScriptFlag(from: status)
+                applyAskFollowUpFlags(from: status)
+            }
+            askFollowUpAvailable = false
+            askFollowUpArmed = false
+            statusText = response.response.message ?? readyPrompt
+        } catch {
+            statusText = "请打开主应用并启动语音会话"
+            isConnected = false
+        }
+    }
+
     private func pollForResult(jobID: UUID?) async -> String? {
         // Allow long multi-segment queues: ~60s total (240 * 250ms).
         for _ in 0..<240 {
             do {
                 let response = try await client.send(.status, jobID: jobID)
                 switch response.response.outcome {
+                case .draft:
+                    guard let draft = response.response.draft else { continue }
+                    activeDraft = draft
+                    currentState = .ready
+                    statusText = "点选候选词后完成"
+                    canRetry = false
+                    return nil
                 case .text:
                     // Do not clobber an in-progress second capture / later waiter UI.
+                    if let status = response.response.status {
+                        applyPolishFlag(from: status)
+                        applyScriptFlag(from: status)
+                        applyAskFollowUpFlags(from: status)
+                    }
                     if !isRecording {
                         currentState = .ready
                         statusText = readyPrompt
@@ -419,25 +619,24 @@ final class KeyboardViewModel: ObservableObject {
                     canRetry = false
                     return response.response.text
                 case .error:
-                    // Job-specific failure (e.g. empty ASR) — do not hard-lock the keyboard.
+                    // Always surface the job-specific message; do not mask it as ready.
                     if let status = response.response.status {
                         applyPolishFlag(from: status)
                         applyScriptFlag(from: status)
-                        if status.state == .ready || status.state == .transcribing || status.state == .polishing {
-                            currentState = status.state == .ready ? .ready : status.state
-                            statusText = status.message ?? readyPrompt
-                            return nil
-                        }
+                        applyAskFollowUpFlags(from: status)
                     }
-                    currentState = .error
-                    statusText = response.response.message ?? "识别失败"
-                    canRetry = true
-                    lastFailed = true
+                    if !isRecording {
+                        currentState = .error
+                        statusText = response.response.message ?? "识别失败"
+                        canRetry = true
+                        lastFailed = true
+                    }
                     return nil
                 case .ok:
                     if let status = response.response.status {
                         applyPolishFlag(from: status)
                         applyScriptFlag(from: status)
+                        applyAskFollowUpFlags(from: status)
                         if !isRecording {
                             currentState = status.state == .recording ? .ready : status.state
                             switch status.state {

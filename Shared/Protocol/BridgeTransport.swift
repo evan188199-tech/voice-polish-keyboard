@@ -107,6 +107,11 @@ private final class ConnectionBuffer: @unchecked Sendable {
 actor BridgeClient {
     private var connection: NWConnection?
     private let token: String
+    /// NWConnection supports streaming, but this client previously issued
+    /// overlapping receives for concurrent commands. Serialize requests so a
+    /// response can never be delivered to the wrong caller.
+    private var requestInFlight = false
+    private var requestWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(token: String = BuildToken.generate()) {
         self.token = token
@@ -132,8 +137,12 @@ actor BridgeClient {
         polishEnabled: Bool? = nil,
         polishMode: String? = nil,
         chineseScript: String? = nil,
-        jobID: UUID? = nil
+        jobID: UUID? = nil,
+        draftText: String? = nil
     ) async throws -> WireResponse {
+        await acquireRequestSlot()
+        defer { releaseRequestSlot() }
+
         if connection?.state != .ready {
             guard await connect() else { throw BridgeError.notConnected }
         }
@@ -146,17 +155,44 @@ actor BridgeClient {
             polishMode: polishMode,
             jobID: jobID,
             chineseScript: chineseScript
+            ,draftText: draftText
         )
         let data = try BridgeFrame.encode(message)
 
-        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<WireResponse, Error>) in
-            connection.send(content: data, completion: .contentProcessed { error in
-                if let error {
-                    continuation.resume(throwing: error)
-                    return
-                }
-                Self.receive(on: connection, continuation: continuation)
-            })
+        do {
+            return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<WireResponse, Error>) in
+                connection.send(content: data, completion: .contentProcessed { error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                        return
+                    }
+                    Self.receive(on: connection, buffer: Data(), continuation: continuation)
+                })
+            }
+        } catch {
+            connection.cancel()
+            if self.connection === connection {
+                self.connection = nil
+            }
+            throw error
+        }
+    }
+
+    private func acquireRequestSlot() async {
+        if !requestInFlight {
+            requestInFlight = true
+            return
+        }
+        await withCheckedContinuation { continuation in
+            requestWaiters.append(continuation)
+        }
+    }
+
+    private func releaseRequestSlot() {
+        if requestWaiters.isEmpty {
+            requestInFlight = false
+        } else {
+            requestWaiters.removeFirst().resume()
         }
     }
 
@@ -213,6 +249,7 @@ actor BridgeClient {
 
     private nonisolated static func receive(
         on connection: NWConnection,
+        buffer: Data,
         continuation: CheckedContinuation<WireResponse, Error>
     ) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { data, _, isComplete, error in
@@ -220,16 +257,20 @@ actor BridgeClient {
                 continuation.resume(throwing: error)
                 return
             }
-            guard let data, let idx = data.firstIndex(of: BridgeFrame.delimiter) else {
+            var accumulated = buffer
+            if let data {
+                accumulated.append(data)
+            }
+            guard let idx = accumulated.firstIndex(of: BridgeFrame.delimiter) else {
                 if isComplete {
                     continuation.resume(throwing: BridgeError.connectionClosed)
                 } else {
-                    Self.receive(on: connection, continuation: continuation)
+                    Self.receive(on: connection, buffer: accumulated, continuation: continuation)
                 }
                 return
             }
             do {
-                let response = try BridgeFrame.decode(WireResponse.self, from: Data(data[..<idx]))
+                let response = try BridgeFrame.decode(WireResponse.self, from: Data(accumulated[..<idx]))
                 continuation.resume(returning: response)
             } catch {
                 continuation.resume(throwing: error)

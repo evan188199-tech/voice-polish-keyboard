@@ -34,6 +34,7 @@
 		68CC4476263CA5A0C54B06E4 /* BuildToken.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3D0E6A8CFCCC640A2E31136 /* BuildToken.swift */; };
 		6A08713DEC5B3AF026AD3DCA /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20FE5D4A2B72A85F661B98D /* AppSettings.swift */; };
 		6A44A4D87138326BCE551F8C /* BridgeSessionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BE1C3087F7F4525138379D8 /* BridgeSessionClient.swift */; };
+		6AC9EBEC1C13D8DE61EA24E2 /* AudioRouteRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55A267C0994312D45262FF23 /* AudioRouteRecoveryTests.swift */; };
 		7113B7EC19A2CB864B69C60F /* KeyboardBridgeServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 296D0CAEBFAB507176B3120D /* KeyboardBridgeServer.swift */; };
 		74F203E2A5F6A8035993F33B /* MenuBarModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CF878655135E88E72EBBDE4 /* MenuBarModel.swift */; };
 		76A5690975B420E78BDDBDB9 /* PolishModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E13FEE8B9E4FA56F3E2C7C4B /* PolishModeTests.swift */; };
@@ -47,6 +48,7 @@
 		8651B67024B778AB38BAB902 /* WireMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6AF26D477C5E5EA0629253E /* WireMessage.swift */; };
 		889947B5638F4078161E1AC7 /* MacMainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CA48F49A02923E3DEAB9EDD /* MacMainView.swift */; };
 		8DC3DA74C51F14F02EB62E38 /* Constants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CE168628B543948A9B95960 /* Constants.swift */; };
+		8E7E2AC8EFD3899B533B42D2 /* DeleteRepeatController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F889D99651360D99CBF82D6 /* DeleteRepeatController.swift */; };
 		91943D41D39C727701F88A5C /* BuildToken.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3D0E6A8CFCCC640A2E31136 /* BuildToken.swift */; };
 		935784CC1592916B2170DA86 /* VoicePolishApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAFEBE107F8F228CD5240F68 /* VoicePolishApp.swift */; };
 		9704485B2AF29C3B2DC82ADF /* InputMethodAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6B0031135A40362FFC8FBFB /* InputMethodAppDelegate.swift */; };
@@ -72,6 +74,7 @@
 		B560250E647407F0B6982062 /* Constants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CE168628B543948A9B95960 /* Constants.swift */; };
 		B8906B6D16BAFF900E2E6E63 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09E19B940612EB5883B7069F /* ContentView.swift */; };
 		BAA22994F1DA94781216E975 /* OrderedDeliveryCursor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 016C65BF0148E33EA696E3A0 /* OrderedDeliveryCursor.swift */; };
+		BDD28FF6D38DA5F6FB7F6ADF /* DeleteRepeatController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F889D99651360D99CBF82D6 /* DeleteRepeatController.swift */; };
 		BF7E9FD8FB12E63C8A5792D8 /* WireMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6AF26D477C5E5EA0629253E /* WireMessage.swift */; };
 		C2E48214CD9FA99D0AE3E97E /* ChineseScriptConverter.swift in Sources */ = {isa = PBXBuildFile; fileRef = F92C0F104846EDF501406C06 /* ChineseScriptConverter.swift */; };
 		C3A5EB082D110F3399FDE926 /* KeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D53B1A1E97DD612833A6032 /* KeyboardView.swift */; };
@@ -90,6 +93,7 @@
 		E827F23053F6B430DE892C3A /* PolishMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3305F071C6EEA40A03F26942 /* PolishMode.swift */; };
 		E864564E9651FAD205CB102D /* VocabularyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6454ED31C9E7BE3BF25B6ACB /* VocabularyView.swift */; };
 		E8762333E5DDFE34E9B4D0F0 /* RightOptionHotkeyService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 799FD0AA191E8593761841CA /* RightOptionHotkeyService.swift */; };
+		EA963925E64565DC6111860C /* DeleteRepeatController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F889D99651360D99CBF82D6 /* DeleteRepeatController.swift */; };
 		F2DEDEA7737490D439A63B61 /* WireMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6AF26D477C5E5EA0629253E /* WireMessage.swift */; };
 		F69A02BE9DA34C4A1E35F180 /* VoicePolishInputController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FBF653F804CB50009247B97 /* VoicePolishInputController.swift */; };
 		F7F5801E95DD9F06BC582128 /* ChineseScriptConverter.swift in Sources */ = {isa = PBXBuildFile; fileRef = F92C0F104846EDF501406C06 /* ChineseScriptConverter.swift */; };
@@ -138,6 +142,7 @@
 		0CA48F49A02923E3DEAB9EDD /* MacMainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMainView.swift; sourceTree = "<group>"; };
 		0E4350C08B9ACE31C606737E /* MacSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSettingsView.swift; sourceTree = "<group>"; };
 		0EA268B80E76AF90C700D4FA /* VoicePolishApp.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = VoicePolishApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		0F889D99651360D99CBF82D6 /* DeleteRepeatController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeleteRepeatController.swift; sourceTree = "<group>"; };
 		136F00918E6BCE2087AE5A95 /* AudioRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRecorder.swift; sourceTree = "<group>"; };
 		233F962443EAB61323D3CD8D /* KeyboardBridgeClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardBridgeClient.swift; sourceTree = "<group>"; };
 		28A4258AB8BF4DB77761F033 /* RightOptionStateMachineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightOptionStateMachineTests.swift; sourceTree = "<group>"; };
@@ -150,6 +155,7 @@
 		4BCEE758CC4BA2F9D6D92719 /* SpeechTranscribing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechTranscribing.swift; sourceTree = "<group>"; };
 		4D53B1A1E97DD612833A6032 /* KeyboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardView.swift; sourceTree = "<group>"; };
 		5384D68A0E0EC20D22DE6133 /* RightOptionStateMachine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightOptionStateMachine.swift; sourceTree = "<group>"; };
+		55A267C0994312D45262FF23 /* AudioRouteRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRouteRecoveryTests.swift; sourceTree = "<group>"; };
 		5C6B2764202C94A62874A90F /* MenuBarContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarContent.swift; sourceTree = "<group>"; };
 		5CE168628B543948A9B95960 /* Constants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Constants.swift; sourceTree = "<group>"; };
 		5FBF653F804CB50009247B97 /* VoicePolishInputController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoicePolishInputController.swift; sourceTree = "<group>"; };
@@ -333,6 +339,7 @@
 			isa = PBXGroup;
 			children = (
 				5CE168628B543948A9B95960 /* Constants.swift */,
+				0F889D99651360D99CBF82D6 /* DeleteRepeatController.swift */,
 				71D1E708042CA34886F8EA9C /* Core */,
 				39A183D71E1B0A0C86BC1187 /* InputMethod */,
 				D835CC8078820694DA0D66F5 /* Protocol */,
@@ -401,6 +408,7 @@
 		F58ED3AD3C00C4760F20FEF1 /* Mac */ = {
 			isa = PBXGroup;
 			children = (
+				55A267C0994312D45262FF23 /* AudioRouteRecoveryTests.swift */,
 				03991244D4999AE39AA5C475 /* ChineseScriptConverterTests.swift */,
 				E13FEE8B9E4FA56F3E2C7C4B /* PolishModeTests.swift */,
 				28A4258AB8BF4DB77761F033 /* RightOptionStateMachineTests.swift */,
@@ -682,6 +690,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				6AC9EBEC1C13D8DE61EA24E2 /* AudioRouteRecoveryTests.swift in Sources */,
 				3345B33566307FCF960F3C35 /* BridgeTransport.swift in Sources */,
 				7E2B3A6E824B830FC7C8DBEE /* BuildToken.swift in Sources */,
 				45017B1A3DDA02D6531E81F9 /* ChineseScriptConverter.swift in Sources */,
@@ -709,6 +718,7 @@
 				68CC4476263CA5A0C54B06E4 /* BuildToken.swift in Sources */,
 				F7F5801E95DD9F06BC582128 /* ChineseScriptConverter.swift in Sources */,
 				8DC3DA74C51F14F02EB62E38 /* Constants.swift in Sources */,
+				BDD28FF6D38DA5F6FB7F6ADF /* DeleteRepeatController.swift in Sources */,
 				78E1AFFE23EAFAE6BDDB4F25 /* KeyboardBridgeServer.swift in Sources */,
 				D72951C487A691F687B530C7 /* LocalTextProcessor.swift in Sources */,
 				16541AD7935A065A609FD210 /* MacAppDelegate.swift in Sources */,
@@ -769,6 +779,7 @@
 				1D12F3B711D7C16833337D25 /* ChineseScriptConverter.swift in Sources */,
 				995F92AE4CC7EA40E788B875 /* Constants.swift in Sources */,
 				B8906B6D16BAFF900E2E6E63 /* ContentView.swift in Sources */,
+				EA963925E64565DC6111860C /* DeleteRepeatController.swift in Sources */,
 				7113B7EC19A2CB864B69C60F /* KeyboardBridgeServer.swift in Sources */,
 				CABEF0C3D2034201AE11C2B6 /* KeyboardGuideView.swift in Sources */,
 				B177B7736D101F78A487C7D9 /* LocalTextProcessor.swift in Sources */,
@@ -794,6 +805,7 @@
 				5CF94F7B3EF68645367DF661 /* BuildToken.swift in Sources */,
 				607919E84C899A86DB927776 /* ChineseScriptConverter.swift in Sources */,
 				B560250E647407F0B6982062 /* Constants.swift in Sources */,
+				8E7E2AC8EFD3899B533B42D2 /* DeleteRepeatController.swift in Sources */,
 				E45D9008E3EBAD2787A466B2 /* KeyboardBridgeClient.swift in Sources */,
 				C3A5EB082D110F3399FDE926 /* KeyboardView.swift in Sources */,
 				9CDC2A60BC878ACEAAF43AC5 /* KeyboardViewController.swift in Sources */,

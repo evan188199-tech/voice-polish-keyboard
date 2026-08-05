@@ -130,8 +130,18 @@ struct ContentView: View {
                 statusIcon
                 VStack(alignment: .leading, spacing: 4) {
                     Text(stateLabel).font(.headline)
+                    if let inputName = coordinator.currentInputName, isSessionLive {
+                        Label(inputName, systemImage: "mic.fill")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     if let message = coordinator.statusMessage {
                         Text(message).font(.caption).foregroundStyle(.secondary)
+                    }
+                    if !coordinator.isInputReady, isSessionLive {
+                        Text("麦克风路由恢复中…")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
                     }
                     if let elapsed = coordinator.elapsedSeconds {
                         Text(String(format: "%.1f 秒", elapsed))

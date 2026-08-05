@@ -84,6 +84,13 @@ final class AppSettings: ObservableObject {
             save()
         }
     }
+    /// iOS keyboard: offer Apple on-device alternatives before optional polish.
+    @Published var voiceCandidateReviewEnabled: Bool {
+        didSet {
+            guard isLoaded else { return }
+            save()
+        }
+    }
     /// macOS: launch companion at login (default true).
     @Published var launchAtLogin: Bool {
         didSet {
@@ -137,6 +144,11 @@ final class AppSettings: ObservableObject {
             compareWithSystemDictation = false
         } else {
             compareWithSystemDictation = defaults.bool(forKey: "compare_with_system_dictation")
+        }
+        if defaults.object(forKey: "voice_candidate_review_enabled") == nil {
+            voiceCandidateReviewEnabled = true
+        } else {
+            voiceCandidateReviewEnabled = defaults.bool(forKey: "voice_candidate_review_enabled")
         }
         if defaults.object(forKey: "launch_at_login") == nil {
             launchAtLogin = true
@@ -339,6 +351,7 @@ final class AppSettings: ObservableObject {
         defaults.set(polishEnabled, forKey: "polish_enabled")
         defaults.set(polishMode.rawValue, forKey: "polish_mode")
         defaults.set(compareWithSystemDictation, forKey: "compare_with_system_dictation")
+        defaults.set(voiceCandidateReviewEnabled, forKey: "voice_candidate_review_enabled")
         defaults.set(launchAtLogin, forKey: "launch_at_login")
         defaults.set(rightOptionHotkeyEnabled, forKey: "right_option_hotkey_enabled")
         defaults.set(chineseScript.rawValue, forKey: "chinese_script")

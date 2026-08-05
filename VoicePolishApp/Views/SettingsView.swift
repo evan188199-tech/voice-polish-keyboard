@@ -178,6 +178,14 @@ struct SettingsView: View {
 
 
                 Section {
+                    Toggle("语音候选词", isOn: $settings.voiceCandidateReviewEnabled)
+                } header: {
+                    Text("键盘语音输入")
+                } footer: {
+                    Text("开启后会并行使用系统端侧听写为不确定的词提供候选。候选仅在键盘中显示，确认后才会进入润色。需要系统语音识别权限和对应语言的离线听写。")
+                }
+
+                Section {
                     Toggle("对照测试 · 系统听写", isOn: $settings.compareWithSystemDictation)
                 } header: {
                     Text("ASR 对照（主 App）")

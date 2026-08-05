@@ -211,9 +211,26 @@ resolve_device() {
   fi
 
   if [[ -n "$requested" ]]; then
+    # Exact CoreDevice id / UDID match.
     if [[ -n "$lines" ]] && grep -q "^${requested}"$'\t' <<< "$lines"; then
       echo "$requested"
       return
+    fi
+    # Friendly name match: air / 16e / ai_home ...
+    if [[ -n "$lines" ]]; then
+      local match
+      match="$(awk -F'\t' -v q="$(printf '%s' "$requested" | tr '[:upper:]' '[:lower:]')" '
+        {
+          id=$1; name=tolower($2);
+          if (name == q || index(name, q) > 0) { print id; exit }
+        }' <<< "$lines")"
+      if [[ -n "$match" ]]; then
+        local match_name
+        match_name="$(awk -F'\t' -v id="$match" '$1==id{print $2; exit}' <<< "$lines")"
+        echo "Matched device by name: ${match_name:-unknown} ($match)" >&2
+        echo "$match"
+        return
+      fi
     fi
     if [[ "$requested" =~ ^[0-9A-Fa-f-]{8,} ]]; then
       echo "Warning: device $requested not in auto-detected list; trying anyway." >&2
@@ -235,7 +252,6 @@ resolve_device() {
   echo "Auto-selected device: ${name:-unknown} ($pick)" >&2
   echo "$pick"
 }
-
 if [[ "${1:-}" == "list" ]]; then
   # Ensure project exists for xcodebuild destination probing, but don't hard-fail.
   if [[ ! -f "$PROJECT/project.pbxproj" ]]; then
@@ -289,14 +305,20 @@ if [[ -z "$APP" || ! -d "$APP" ]]; then
   exit 1
 fi
 
-# Re-check wired device right before install so we don't use a stale/wrong id.
-LIVE_LINES="$(unique_devices || true)"
-if [[ -n "$LIVE_LINES" ]]; then
-  WIRED_ID="$(awk -F'\t' '$3=="available"{print $1; exit}' <<< "$LIVE_LINES")"
-  if [[ -n "$WIRED_ID" && "$WIRED_ID" != "$DEVICE_ID" ]]; then
-    echo "Note: switching install target to currently available device $WIRED_ID (was $DEVICE_ID)"
-    DEVICE_ID="$WIRED_ID"
+# Only auto-retarget when the caller did not ask for a specific device.
+# Previous behavior stole Air installs onto the first "available" phone (often 16e).
+REQUESTED_DEVICE="${1:-}"
+if [[ -z "$REQUESTED_DEVICE" ]]; then
+  LIVE_LINES="$(unique_devices || true)"
+  if [[ -n "$LIVE_LINES" ]]; then
+    WIRED_ID="$(awk -F'\t' '$3=="available"{print $1; exit}' <<< "$LIVE_LINES")"
+    if [[ -n "$WIRED_ID" && "$WIRED_ID" != "$DEVICE_ID" ]]; then
+      echo "Note: switching install target to currently available device $WIRED_ID (was $DEVICE_ID)"
+      DEVICE_ID="$WIRED_ID"
+    fi
   fi
+else
+  echo "Keeping requested install target: $DEVICE_ID"
 fi
 
 echo "Installing $APP -> $DEVICE_ID"

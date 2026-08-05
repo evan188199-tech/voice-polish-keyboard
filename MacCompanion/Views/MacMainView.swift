@@ -49,10 +49,20 @@ struct MacMainView: View {
             Image(systemName: symbol)
                 .foregroundStyle(color)
                 .frame(width: 28)
-            VStack(alignment: .leading) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(label).font(.headline)
+                if let inputName = coordinator.currentInputName {
+                    Text(inputName)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 if let message = coordinator.statusMessage {
                     Text(message).font(.caption).foregroundStyle(.secondary)
+                }
+                if !coordinator.isInputReady, coordinator.state != .inactive {
+                    Text("麦克风路由恢复中…")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
                 }
             }
             Spacer()

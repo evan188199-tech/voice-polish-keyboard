@@ -1,5 +1,11 @@
 import Foundation
 
+/// One prior user/assistant exchange for ask-mode follow-up.
+struct AskConversationTurn: Sendable, Equatable {
+    let user: String
+    let assistant: String
+}
+
 protocol TextPolishing: Sendable {
     func polish(_ raw: String, settings: PolishingSettings) async throws -> String
 }
@@ -12,6 +18,8 @@ struct PolishingSettings: Sendable {
     let mode: PolishMode
 
     let chineseScript: ChineseScriptPreference?
+    /// Prior ask turns for serial follow-up; ignored by non-ask modes.
+    let askHistory: [AskConversationTurn]
 
     init(
         baseURL: String,
@@ -19,7 +27,8 @@ struct PolishingSettings: Sendable {
         apiKey: String,
         timeout: TimeInterval = AppConstants.polishingTimeout,
         mode: PolishMode = .default,
-        chineseScript: ChineseScriptPreference? = nil
+        chineseScript: ChineseScriptPreference? = nil,
+        askHistory: [AskConversationTurn] = []
     ) {
         self.baseURL = Self.normalizeBaseURL(baseURL)
         self.modelName = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -28,6 +37,7 @@ struct PolishingSettings: Sendable {
         let defaultTimeout = mode == .askLLM ? 15.0 : 10.0
         self.timeout = max(timeout, defaultTimeout)
         self.chineseScript = chineseScript
+        self.askHistory = askHistory
     }
 
     /// Accepts OpenAI-style roots (`https://api.openai.com`), roots already ending in `/v1`,
@@ -90,13 +100,37 @@ final class APITextPolisher: TextPolishing, @unchecked Sendable {
     func polish(_ raw: String, settings: PolishingSettings) async throws -> String {
         let prompt = settings.chineseScript.map { settings.mode.systemPromptWithScript($0) }
             ?? settings.mode.systemPrompt
-        return try await chatCompletion(
-            userText: raw,
-            systemPrompt: prompt,
-            settings: settings,
-            maxTokens: 4096,
-            temperature: settings.mode.temperature
-        )
+        if settings.mode != .askLLM {
+            return try await chatCompletion(
+                userText: raw,
+                systemPrompt: prompt,
+                settings: settings,
+                maxTokens: 4096,
+                temperature: settings.mode.temperature
+            )
+        }
+
+        var lastError: Error?
+        for attempt in 0..<2 {
+            do {
+                let content = try await chatCompletion(
+                    userText: raw,
+                    systemPrompt: prompt,
+                    settings: settings,
+                    maxTokens: 4096,
+                    temperature: settings.mode.temperature,
+                    askHistory: settings.askHistory
+                )
+                return try AskAnswerParser.parse(content, sourceText: raw)
+            } catch {
+                lastError = error
+                if attempt == 0, AskAnswerParser.isRetryable(error) {
+                    continue
+                }
+                throw error
+            }
+        }
+        throw lastError ?? PolishingError.noResponse
     }
 
     /// Exposed for unit tests.
@@ -158,7 +192,8 @@ final class APITextPolisher: TextPolishing, @unchecked Sendable {
         settings: PolishingSettings,
         maxTokens: Int,
         temperature: Double,
-        allowEmptyContent: Bool = false
+        allowEmptyContent: Bool = false,
+        askHistory: [AskConversationTurn] = []
     ) async throws -> String {
         guard settings.chatCompletionsURL != nil else { throw PolishingError.invalidURL }
 
@@ -172,7 +207,8 @@ final class APITextPolisher: TextPolishing, @unchecked Sendable {
                     maxTokens: maxTokens,
                     temperature: temperature,
                     shape: shape,
-                    allowEmptyContent: allowEmptyContent
+                    allowEmptyContent: allowEmptyContent,
+                    askHistory: askHistory
                 )
             } catch let error as PolishingError {
                 lastError = error
@@ -212,23 +248,17 @@ final class APITextPolisher: TextPolishing, @unchecked Sendable {
         maxTokens: Int,
         temperature: Double,
         shape: RequestShape,
-        allowEmptyContent: Bool
+        allowEmptyContent: Bool,
+        askHistory: [AskConversationTurn] = []
     ) async throws -> String {
         guard let url = settings.chatCompletionsURL else { throw PolishingError.invalidURL }
 
-        let messages: [[String: String]]
-        switch shape {
-        case .userOnly:
-            messages = [[
-                "role": "user",
-                "content": systemPrompt + "\n\n" + userText
-            ]]
-        default:
-            messages = [
-                ["role": "system", "content": systemPrompt],
-                ["role": "user", "content": userText]
-            ]
-        }
+        let messages = Self.buildMessages(
+            userText: userText,
+            systemPrompt: systemPrompt,
+            shape: shape,
+            askHistory: askHistory
+        )
 
         var body: [String: Any] = [
             "model": settings.modelName,
@@ -275,6 +305,45 @@ final class APITextPolisher: TextPolishing, @unchecked Sendable {
             return ""
         }
         throw PolishingError.invalidResponse
+    }
+
+
+    private static func buildMessages(
+        userText: String,
+        systemPrompt: String,
+        shape: RequestShape,
+        askHistory: [AskConversationTurn]
+    ) -> [[String: String]] {
+        var turns: [[String: String]] = []
+        for item in askHistory {
+            let user = item.user.trimmingCharacters(in: .whitespacesAndNewlines)
+            let assistant = item.assistant.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !user.isEmpty, !assistant.isEmpty else { continue }
+            turns.append(["role": "user", "content": user])
+            turns.append(["role": "assistant", "content": assistant])
+        }
+
+        switch shape {
+        case .userOnly:
+            var flat = systemPrompt
+            if !turns.isEmpty {
+                flat += "\n\n以下是此前对话（请在此基础上继续回复）："
+                for message in turns {
+                    let roleLabel = message["role"] == "assistant" ? "助手" : "用户"
+                    let content = message["content"] ?? ""
+                    flat += "\n" + roleLabel + "：" + content
+                }
+            }
+            flat += "\n\n" + userText
+            return [["role": "user", "content": flat]]
+        default:
+            var messages: [[String: String]] = [
+                ["role": "system", "content": systemPrompt]
+            ]
+            messages.append(contentsOf: turns)
+            messages.append(["role": "user", "content": userText])
+            return messages
+        }
     }
 
     /// Supports plain string content and multi-part content arrays used by some omni models.
@@ -325,6 +394,8 @@ enum PolishingError: Error, LocalizedError {
     case missingAPIKey
     case httpError(Int, String)
     case invalidResponse
+    /// Ask mode returned empty/malformed/echo content.
+    case invalidAskAnswer
 
     var errorDescription: String? {
         switch self {
@@ -343,6 +414,7 @@ enum PolishingError: Error, LocalizedError {
             }
             return "API 返回错误 (\(code))：\(snippet)"
         case .invalidResponse: return "API 返回格式异常。"
+        case .invalidAskAnswer: return "问答结果无效，请重试。"
         }
     }
 
@@ -374,3 +446,97 @@ enum PolishingError: Error, LocalizedError {
         text.count > limit ? String(text.prefix(limit)) + "…" : text
     }
 }
+
+/// Internal ask-mode envelope helpers: parse `{"answer":"..."}` (or plain text fallback).
+enum AskAnswerParser {
+    /// Extract a sendable answer. Rejects empty, JSON-looking garbage, and full-source echoes.
+    static func parse(_ raw: String, sourceText: String) throws -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw PolishingError.invalidAskAnswer }
+
+        let unwrapped = unwrapCodeFence(trimmed)
+        if let data = unwrapped.data(using: .utf8),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            guard let answer = object["answer"] as? String else {
+                throw PolishingError.invalidAskAnswer
+            }
+            let cleaned = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleaned.isEmpty else { throw PolishingError.invalidAskAnswer }
+            if isEcho(cleaned, of: sourceText) {
+                throw PolishingError.invalidAskAnswer
+            }
+            return cleaned
+        }
+
+        let looksLikeJSON = unwrapped.hasPrefix("{") || unwrapped.hasPrefix("[")
+        if looksLikeJSON {
+            throw PolishingError.invalidAskAnswer
+        }
+
+        if isEcho(trimmed, of: sourceText) {
+            throw PolishingError.invalidAskAnswer
+        }
+        return trimmed
+    }
+
+    /// Transient failures worth one automatic retry in ask mode.
+    static func isRetryable(_ error: Error) -> Bool {
+        if let polishingError = error as? PolishingError {
+            switch polishingError {
+            case .timeout, .noResponse, .invalidResponse, .invalidAskAnswer:
+                return true
+            case .httpError(let code, let body):
+                if code == 429 || code >= 500 {
+                    return true
+                }
+                let lower = body.lowercased()
+                if lower.contains("unsupported model") {
+                    return false
+                }
+                return false
+            case .invalidURL, .missingAPIKey:
+                return false
+            }
+        }
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .timedOut, .networkConnectionLost, .notConnectedToInternet, .cannotConnectToHost:
+                return true
+            default:
+                return false
+            }
+        }
+        return false
+    }
+
+    static func isEcho(_ answer: String, of source: String) -> Bool {
+        let normalizedAnswer = normalizeForComparison(answer)
+        let normalizedSource = normalizeForComparison(source)
+        guard !normalizedAnswer.isEmpty, !normalizedSource.isEmpty else { return false }
+        return normalizedAnswer == normalizedSource
+    }
+
+    private static func unwrapCodeFence(_ text: String) -> String {
+        var value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value.hasPrefix("```") else { return value }
+        if let firstNewline = value.firstIndex(of: "\n") {
+            value = String(value[value.index(after: firstNewline)...])
+        } else {
+            value = String(value.dropFirst(3))
+        }
+        if value.hasSuffix("```") {
+            value = String(value.dropLast(3))
+        }
+        return value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func normalizeForComparison(_ text: String) -> String {
+        let lowered = text.lowercased()
+        let filtered = lowered.unicodeScalars.filter { scalar in
+            CharacterSet.alphanumerics.contains(scalar)
+                || (scalar.value >= 0x4E00 && scalar.value <= 0x9FFF)
+        }
+        return String(String.UnicodeScalarView(filtered))
+    }
+}
+

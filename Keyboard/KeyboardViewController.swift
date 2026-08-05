@@ -17,6 +17,12 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        // A third-party keyboard cannot safely replace text after its host
+        // cursor has moved. Commit the marked raw draft and release the job.
+        if viewModel.activeDraft != nil {
+            textDocumentProxy.unmarkText()
+            Task { await viewModel.abandonActiveDraft() }
+        }
         viewModel.disconnect()
     }
 
@@ -31,6 +37,16 @@ final class KeyboardViewController: UIInputViewController {
             },
             onReturn: { [weak self] in
                 self?.textDocumentProxy.insertText("\n")
+            },
+            onSetMarkedText: { [weak self] text in
+                guard let self else { return }
+                self.textDocumentProxy.setMarkedText(
+                    text,
+                    selectedRange: NSRange(location: text.utf16.count, length: 0)
+                )
+            },
+            onUnmarkText: { [weak self] in
+                self?.textDocumentProxy.unmarkText()
             }
         )
 

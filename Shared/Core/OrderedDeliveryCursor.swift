@@ -34,6 +34,8 @@ enum VoiceJobStatusText {
             base = "识别中…"
         case .queuedPolish, .polishing:
             base = polishMode.processingStatusMessage
+        case .awaitingReview:
+            base = "待确认候选词"
         case .ready:
             base = "待插入…"
         case .failed:
@@ -51,6 +53,7 @@ enum VoiceJobPhase: String, Equatable, Sendable {
     case transcribing
     case queuedPolish
     case polishing
+    case awaitingReview
     case ready
     case failed
 }

@@ -1,15 +1,20 @@
 import SwiftUI
+import UIKit
 
 struct KeyboardView: View {
     @ObservedObject var model: KeyboardViewModel
     let onInsert: (String) -> Void
     let onDelete: () -> Void
     let onReturn: () -> Void
+    let onSetMarkedText: (String) -> Void
+    let onUnmarkText: () -> Void
 
+    @State private var page: KeyboardPage = .voice
     @State private var dragX: CGFloat = 0
     @State private var pressed = false
 
     private let cancelThreshold: CGFloat = -60
+    private let keyboardHeight: CGFloat = 294
 
     private static let quickSymbols: [(character: String, accessibilityLabel: String)] = [
         ("@", "at 符号"),
@@ -22,19 +27,42 @@ struct KeyboardView: View {
         ("_", "下划线")
     ]
 
+    private static let numberPadRows: [[(character: String, accessibilityLabel: String)]] = [
+        [("1", "1"), ("2", "2"), ("3", "3")],
+        [("4", "4"), ("5", "5"), ("6", "6")],
+        [("7", "7"), ("8", "8"), ("9", "9")],
+        [(".", "小数点"), ("0", "0"), (",", "逗号")]
+    ]
+
     var body: some View {
         VStack(spacing: 8) {
-            statusBar
-            micArea
-            symbolRow
+            if model.activeDraft != nil {
+                statusBar
+                candidateReviewArea
+            } else if page == .voice {
+                statusBar
+                micArea
+            } else {
+                numberPadContent
+            }
             editingRow
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity)
-        .frame(minHeight: 268)
-        .background(Color(uiColor: .systemBackground))
-        .task { await model.connect() }
+        .frame(height: keyboardHeight)
+        .background(Color(uiColor: .systemGroupedBackground))
+        .onChange(of: model.isRecording) { _, isRecording in
+            // Keep the user on the voice page while a hold-to-record gesture is active.
+            if isRecording {
+                page = .voice
+            }
+        }
+        .onChange(of: model.activeDraft) { _, draft in
+            if let draft {
+                onSetMarkedText(draft.text)
+            }
+        }
     }
 
     // MARK: - Status
@@ -66,7 +94,7 @@ struct KeyboardView: View {
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(
-                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
                             .fill(Color.orange.opacity(0.15))
                     )
                     .foregroundStyle(Color.orange)
@@ -74,6 +102,7 @@ struct KeyboardView: View {
             .buttonStyle(.plain)
             .disabled(!model.isConnected || model.isRecording)
             .opacity((!model.isConnected || model.isRecording) ? 0.45 : 1)
+            .accessibilityLabel("中文脚本：\(model.chineseScript.shortLabel)")
             if !model.isConnected {
                 Text("未连接")
                     .font(.caption2)
@@ -87,6 +116,26 @@ struct KeyboardView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.mini)
             }
+            if model.polishEnabled,
+               model.polishMode == .askLLM,
+               model.askFollowUpAvailable,
+               !model.isRecording {
+                Button(model.askFollowUpArmed ? "追问中" : "追问") {
+                    Task { await model.armAskFollowUp() }
+                }
+                .font(.caption)
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .disabled(!model.isConnected || model.askFollowUpArmed)
+                if model.askFollowUpAvailable {
+                    Button("新问答") {
+                        Task { await model.clearAskConversation() }
+                    }
+                    .font(.caption2)
+                    .buttonStyle(.borderless)
+                    .disabled(!model.isConnected || model.isRecording)
+                }
+            }
         }
         .frame(minHeight: 28)
     }
@@ -96,7 +145,6 @@ struct KeyboardView: View {
     private var micArea: some View {
         VStack(spacing: 8) {
             if model.isRecording {
-                // Lightweight animated bars while holding
                 HStack(spacing: 3) {
                     ForEach(0..<20, id: \.self) { index in
                         Capsule()
@@ -127,12 +175,13 @@ struct KeyboardView: View {
                         if model.isProcessing && !model.isRecording {
                             ProgressView().tint(.white)
                         }
+
                     }
                     .scaleEffect(model.isRecording ? 1.08 : 1.0)
                     .offset(x: model.isRecording ? min(0, dragX) : 0)
                     .gesture(micGesture)
-                    .disabled(!model.isConnected)
                     .opacity(!model.isConnected && !model.isRecording ? 0.45 : 1)
+                    .accessibilityLabel(model.isRecording ? "正在录音" : "按住说话")
 
                     Text(model.isRecording ? "松手识别" : "按住说话")
                         .font(.caption2)
@@ -143,8 +192,98 @@ struct KeyboardView: View {
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.vertical, 4)
+    }
+
+    // MARK: - Candidate review
+
+    private var candidateReviewArea: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let draft = model.activeDraft {
+                Text(draft.text)
+                    .font(.subheadline)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.blue.opacity(0.08))
+                    )
+
+                ForEach(draft.candidateGroups) { group in
+                    candidateRow(group, draft: draft)
+                }
+
+                HStack {
+                    Text("可疑词")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("完成") {
+                        finishDraftReview()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .padding(.vertical, 4)
+    }
+
+    private func candidateRow(_ group: CandidateGroup, draft: VoiceDraft) -> some View {
+        let original = group.original.isEmpty
+            ? (draftSubstring(group.range, from: draft.text) ?? "")
+            : group.original
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(original)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.blue)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    candidateChip("保留", selected: false) {
+                        model.selectCandidate(groupID: group.id, replacement: original)
+                    }
+                    ForEach(group.alternatives, id: \.self) { alternative in
+                        candidateChip(alternative, selected: alternative == original) {
+                            model.selectCandidate(groupID: group.id, replacement: alternative)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func candidateChip(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption)
+                .lineLimit(1)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .background(
+                    Capsule().fill(selected ? Color.blue.opacity(0.2) : Color.secondary.opacity(0.12))
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func draftSubstring(_ range: UTF16TextRange, from text: String) -> String? {
+        let count = text.utf16.count
+        guard range.location <= count, range.length <= count - range.location else { return nil }
+        let start = String.Index(utf16Offset: range.location, in: text)
+        let end = String.Index(utf16Offset: range.location + range.length, in: text)
+        return String(text[start..<end])
+    }
+
+    private func finishDraftReview() {
+        Task {
+            if let text = await model.confirmActiveDraft() {
+                onSetMarkedText(text)
+                onUnmarkText()
+            }
+        }
     }
 
     private var micGesture: some Gesture {
@@ -155,18 +294,14 @@ struct KeyboardView: View {
                     model.noteHoldBegan()
                     Task { await model.onPressDown() }
                 }
-                // Track drag even before the async start completes so left-swipe cancel works.
                 if pressed || model.isRecording {
                     dragX = value.translation.width
                 }
             }
             .onEnded { value in
                 let wasPressed = pressed
-                defer {
-                    pressed = false
-                    dragX = 0
-                }
-                // End based on the finger session, not isRecording — start may still be in flight.
+                pressed = false
+                dragX = 0
                 guard wasPressed else { return }
                 if value.translation.width < cancelThreshold {
                     Task { await model.onSwipeCancel() }
@@ -227,11 +362,11 @@ struct KeyboardView: View {
             .frame(maxWidth: .infinity, minHeight: 34)
             .padding(.vertical, 2)
             .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(selected ? Color.orange.opacity(0.22) : Color.secondary.opacity(0.12))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .strokeBorder(selected ? Color.orange.opacity(0.75) : Color.clear, lineWidth: 1.5)
             )
             .foregroundStyle(selected ? Color.orange : Color.primary.opacity(0.85))
@@ -242,52 +377,157 @@ struct KeyboardView: View {
         .accessibilityHint(selected ? "再次点击关闭润色" : "选择此模式")
     }
 
-    // MARK: - Symbols & Editing
+    // MARK: - Number page
+
+    private var numberPadContent: some View {
+        VStack(spacing: 8) {
+            symbolRow
+            numberGrid
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
 
     private var symbolRow: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 5) {
             ForEach(Self.quickSymbols, id: \.character) { symbol in
-                Button {
-                    onInsert(symbol.character)
-                } label: {
-                    Text(symbol.character)
-                        .font(.subheadline.weight(.medium))
-                        .frame(maxWidth: .infinity, minHeight: 34)
-                }
-                .buttonStyle(.bordered)
-                .accessibilityLabel(symbol.accessibilityLabel)
+                characterKey(
+                    symbol.character,
+                    accessibilityLabel: symbol.accessibilityLabel,
+                    style: .symbol
+                )
             }
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("常用符号")
     }
 
+    private var numberGrid: some View {
+        VStack(spacing: 6) {
+            ForEach(Array(Self.numberPadRows.enumerated()), id: \.offset) { _, row in
+                HStack(spacing: 8) {
+                    ForEach(row, id: \.character) { key in
+                        characterKey(
+                            key.character,
+                            accessibilityLabel: key.accessibilityLabel,
+                            style: .number
+                        )
+                    }
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("数字键盘")
+    }
+
+    // MARK: - Editing row
+
     private var editingRow: some View {
         HStack(spacing: 6) {
-            keyButton("空格") { onInsert(" ") }
-                .frame(maxWidth: .infinity)
-            iconButton("delete.backward", action: onDelete)
-            keyButton("换行", action: onReturn)
+            pageToggleButton
+                .frame(width: 56)
+
+            characterKey("空格", accessibilityLabel: "空格", style: .space) {
+                requestInsertion(" ")
+            }
+            .frame(maxWidth: .infinity)
+
+            continuousDeleteButton
+                .frame(width: 48)
+
+            characterKey("换行", accessibilityLabel: "换行", style: .returnKey) {
+                requestAction(onReturn)
+            }
                 .frame(width: 64)
         }
     }
 
-    private func keyButton(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.subheadline)
-                .frame(maxWidth: .infinity, minHeight: 36)
+    private var pageToggleButton: some View {
+        let canSwitch = !model.isRecording
+        return Button {
+            guard canSwitch else { return }
+            guard model.activeDraft == nil else {
+                finishDraftReview()
+                return
+            }
+            withAnimation(.easeInOut(duration: 0.18)) {
+                page = page == .voice ? .numbers : .voice
+            }
+        } label: {
+            Group {
+                if page == .voice {
+                    Text("123")
+                        .font(.subheadline.weight(.semibold).monospacedDigit())
+                } else {
+                    Image(systemName: "mic.fill")
+                        .font(.body.weight(.semibold))
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 40)
+            .foregroundStyle(Color.primary)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color(uiColor: .secondarySystemFill))
+            )
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(KeyboardPressButtonStyle())
+        .disabled(!canSwitch)
+        .opacity(canSwitch ? 1 : 0.45)
+        .accessibilityLabel(page == .voice ? "切换到数字键盘" : "切换到语音键盘")
+        .accessibilityHint(canSwitch ? "切换输入页面" : "录音时不可切换")
     }
 
-    private func iconButton(_ systemName: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .frame(width: 44, height: 36)
-        }
-        .buttonStyle(.bordered)
+    private var continuousDeleteButton: some View {
+        ContinuousDeleteKey { requestAction(onDelete) }
     }
+
+    // MARK: - Shared key chrome
+
+    private func characterKey(
+        _ title: String,
+        accessibilityLabel: String,
+        style: KeyVisualStyle,
+        action: (() -> Void)? = nil
+    ) -> some View {
+        Button {
+            if let action {
+                action()
+            } else {
+                requestInsertion(title)
+            }
+        } label: {
+            Text(title)
+                .font(style.font)
+                .frame(maxWidth: .infinity, minHeight: style.minHeight)
+                .foregroundStyle(style.foreground)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(style.background)
+                        .shadow(color: Color.black.opacity(0.06), radius: 0.5, y: 0.5)
+                )
+        }
+        .buttonStyle(KeyboardPressButtonStyle())
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private func requestInsertion(_ text: String) {
+        requestAction { onInsert(text) }
+    }
+
+    private func requestAction(_ action: @escaping () -> Void) {
+        guard model.activeDraft != nil else {
+            action()
+            return
+        }
+        Task {
+            guard let text = await model.confirmActiveDraft() else { return }
+            onSetMarkedText(text)
+            onUnmarkText()
+            action()
+        }
+    }
+
+    // MARK: - Helpers
 
     private var statusColor: Color {
         switch model.currentState {
@@ -304,5 +544,208 @@ struct KeyboardView: View {
         let minutes = Int(time) / 60
         let seconds = Int(time) % 60
         return String(format: "%d:%02d", minutes, seconds)
+    }
+}
+
+// MARK: - Supporting types
+
+private enum KeyboardPage {
+    case voice
+    case numbers
+}
+
+private enum KeyVisualStyle {
+    case number
+    case symbol
+    case space
+    case returnKey
+
+    var minHeight: CGFloat {
+        switch self {
+        case .number: 42
+        case .symbol: 34
+        case .space, .returnKey: 40
+        }
+    }
+
+    var font: Font {
+        switch self {
+        case .number:
+            return .title3.weight(.medium).monospacedDigit()
+        case .symbol:
+            return .subheadline.weight(.medium)
+        case .space, .returnKey:
+            return .subheadline.weight(.semibold)
+        }
+    }
+
+    var foreground: Color {
+        switch self {
+        case .returnKey:
+            return .white
+        default:
+            return .primary
+        }
+    }
+
+    var background: Color {
+        switch self {
+        case .returnKey:
+            return Color.accentColor
+        case .number:
+            return Color(uiColor: .secondarySystemGroupedBackground)
+        case .symbol, .space:
+            return Color(uiColor: .secondarySystemFill)
+        }
+    }
+}
+
+/// Soft press feedback used by character and control keys.
+private struct KeyboardPressButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .opacity(configuration.isPressed ? 0.88 : 1)
+            .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
+    }
+}
+
+/// Long-press friendly delete control.
+///
+/// Uses a transparent UIControl touch layer so drag-exit / cancellation are reliable,
+/// and delegates repeat timing to `DeleteRepeatController`.
+private struct ContinuousDeleteKey: View {
+    let onDelete: () -> Void
+
+    @State private var isPressed = false
+    @State private var controller: DeleteRepeatController?
+
+    var body: some View {
+        ZStack {
+            Image(systemName: "delete.backward")
+                .font(.body.weight(.medium))
+                .frame(maxWidth: .infinity, minHeight: 40)
+                .foregroundStyle(Color.primary)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color(uiColor: .secondarySystemFill))
+                )
+                .scaleEffect(isPressed ? 0.96 : 1)
+                .opacity(isPressed ? 0.88 : 1)
+                .animation(.easeOut(duration: 0.08), value: isPressed)
+
+            DeleteKeyTouchControl(
+                onTouchDown: handleTouchDown,
+                onTouchEnd: handleTouchEnd
+            )
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .onDisappear {
+            stopRepeating()
+        }
+        .accessibilityLabel("删除")
+        .accessibilityHint("轻点删除一个字符，长按连续删除")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction {
+            // VoiceOver keeps single-delete semantics; no continuous repeat.
+            onDelete()
+        }
+    }
+
+    private func activeController() -> DeleteRepeatController {
+        if let controller {
+            return controller
+        }
+        let created = DeleteRepeatController(onDelete: onDelete)
+        controller = created
+        return created
+    }
+
+    private func handleTouchDown() {
+        isPressed = true
+        // One light impact on the initial press only; repeat ticks stay silent.
+        let haptic = UIImpactFeedbackGenerator(style: .light)
+        haptic.prepare()
+        haptic.impactOccurred(intensity: 0.7)
+        activeController().pressBegan()
+    }
+
+    private func handleTouchEnd() {
+        stopRepeating()
+    }
+
+    private func stopRepeating() {
+        isPressed = false
+        controller?.cancel()
+    }
+}
+
+/// Transparent UIKit control that surfaces the keyboard-grade touch events we need
+/// for continuous delete: down, drag-exit, up, and system cancellation.
+private struct DeleteKeyTouchControl: UIViewRepresentable {
+    var onTouchDown: () -> Void
+    var onTouchEnd: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onTouchDown: onTouchDown, onTouchEnd: onTouchEnd)
+    }
+
+    func makeUIView(context: Context) -> UIControl {
+        let control = UIControl()
+        control.backgroundColor = .clear
+        control.isAccessibilityElement = false
+
+        let coordinator = context.coordinator
+        control.addTarget(coordinator, action: #selector(Coordinator.touchDown), for: .touchDown)
+        control.addTarget(coordinator, action: #selector(Coordinator.touchUpInside), for: .touchUpInside)
+        control.addTarget(coordinator, action: #selector(Coordinator.touchUpOutside), for: .touchUpOutside)
+        control.addTarget(coordinator, action: #selector(Coordinator.touchDragExit), for: .touchDragExit)
+        control.addTarget(coordinator, action: #selector(Coordinator.touchCancel), for: .touchCancel)
+        return control
+    }
+
+    func updateUIView(_ uiView: UIControl, context: Context) {
+        context.coordinator.onTouchDown = onTouchDown
+        context.coordinator.onTouchEnd = onTouchEnd
+    }
+
+    final class Coordinator: NSObject {
+        var onTouchDown: () -> Void
+        var onTouchEnd: () -> Void
+        private var isTracking = false
+
+        init(onTouchDown: @escaping () -> Void, onTouchEnd: @escaping () -> Void) {
+            self.onTouchDown = onTouchDown
+            self.onTouchEnd = onTouchEnd
+        }
+
+        @objc func touchDown() {
+            guard !isTracking else { return }
+            isTracking = true
+            onTouchDown()
+        }
+
+        @objc func touchUpInside() {
+            endTracking()
+        }
+
+        @objc func touchUpOutside() {
+            endTracking()
+        }
+
+        @objc func touchDragExit() {
+            // Leaving the key cancels the current press session permanently.
+            endTracking()
+        }
+
+        @objc func touchCancel() {
+            endTracking()
+        }
+
+        private func endTracking() {
+            guard isTracking else { return }
+            isTracking = false
+            onTouchEnd()
+        }
     }
 }

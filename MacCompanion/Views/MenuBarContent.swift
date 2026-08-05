@@ -13,10 +13,20 @@ struct MenuBarContent: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(statusLine)
                 .font(.headline)
+            if let inputName = coordinator.currentInputName {
+                Text(inputName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             if let message = coordinator.statusMessage {
                 Text(message)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+            if !coordinator.isInputReady, coordinator.state != .inactive {
+                Text("麦克风切换中…")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
             }
             Text(accessibilityLine)
                 .font(.caption2)

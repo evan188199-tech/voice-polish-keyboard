@@ -16,6 +16,10 @@ final class VoicePolishInputController: IMKInputController {
     private var pendingText: String?
     private var polishEnabled = true
     private var polishMode: PolishMode = .default
+    /// Prior ask answer exists for serial follow-up.
+    private var askFollowUpAvailable = false
+    /// Next ask capture will include conversation history.
+    private var askFollowUpArmed = false
     /// Cancels a recording if Right Option "up" is lost (stuck PTT).
     private var recordingWatchdog: DispatchWorkItem?
 
@@ -131,6 +135,26 @@ final class VoicePolishInputController: IMKInputController {
         modesRoot.submenu = modeSub
         menu.addItem(modesRoot)
 
+        if polishEnabled, polishMode == .askLLM, askFollowUpAvailable {
+            menu.addItem(.separator())
+            let followItem = NSMenuItem(
+                title: askFollowUpArmed ? "追问中" : "追问",
+                action: #selector(armAskFollowUpFromMenu(_:)),
+                keyEquivalent: ""
+            )
+            followItem.target = self
+            followItem.isEnabled = !askFollowUpArmed
+            menu.addItem(followItem)
+
+            let clearItem = NSMenuItem(
+                title: "新问答",
+                action: #selector(clearAskConversationFromMenu(_:)),
+                keyEquivalent: ""
+            )
+            clearItem.target = self
+            menu.addItem(clearItem)
+        }
+
         menu.addItem(.separator())
         let refreshItem = NSMenuItem(
             title: "刷新连接状态",
@@ -172,6 +196,14 @@ final class VoicePolishInputController: IMKInputController {
                 StatusOverlayController.shared.show("请先打开粤英语音伴随应用", isError: true)
             }
         }
+    }
+
+    @objc private func armAskFollowUpFromMenu(_ sender: Any?) {
+        Task { @MainActor in await armAskFollowUp() }
+    }
+
+    @objc private func clearAskConversationFromMenu(_ sender: Any?) {
+        Task { @MainActor in await clearAskConversation() }
     }
 
     override func activateServer(_ sender: Any!) {
@@ -221,6 +253,16 @@ final class VoicePolishInputController: IMKInputController {
         if let mode = PolishMode.fromWire(status.polishMode) {
             polishMode = mode
         }
+        if let available = status.askFollowUpAvailable {
+            askFollowUpAvailable = available
+        }
+        if let armed = status.askFollowUpArmed {
+            askFollowUpArmed = armed
+        }
+        if !polishEnabled || polishMode != .askLLM {
+            askFollowUpAvailable = false
+            askFollowUpArmed = false
+        }
     }
 
     private func cyclePolishMode() async {
@@ -249,7 +291,7 @@ final class VoicePolishInputController: IMKInputController {
                 await MainActor.run {
                     StatusOverlayController.shared.show(msg, isError: true)
                 }
-            case .text:
+            case .draft, .text:
                 break
             }
         } catch {
@@ -285,7 +327,7 @@ final class VoicePolishInputController: IMKInputController {
                 await MainActor.run {
                     StatusOverlayController.shared.show(msg, isError: true)
                 }
-            case .text:
+            case .draft, .text:
                 break
             }
         } catch {
@@ -320,13 +362,59 @@ final class VoicePolishInputController: IMKInputController {
                 await MainActor.run {
                     StatusOverlayController.shared.show(msg, isError: true)
                 }
-            case .text:
+            case .draft, .text:
                 break
             }
         } catch {
             await MainActor.run {
                 StatusOverlayController.shared.show("伴随应用未连接", isError: true)
             }
+        }
+    }
+
+    private func armAskFollowUp() async {
+        let connected = await bridge.ensureConnected(launchCompanionIfNeeded: true)
+        guard connected else {
+            StatusOverlayController.shared.show("请先打开粤英语音伴随应用", isError: true)
+            return
+        }
+        do {
+            let response = try await bridge.send(.armAskFollowUp)
+            switch response.response.outcome {
+            case .ok:
+                applyPolishState(from: response.response.status)
+                askFollowUpArmed = true
+                StatusOverlayController.shared.show(response.response.message ?? "追问已就绪 · 按住说话")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                    StatusOverlayController.shared.hide()
+                }
+            case .error, .unauthorized:
+                StatusOverlayController.shared.show(response.response.message ?? "无法追问", isError: true)
+            case .draft, .text:
+                break
+            }
+        } catch {
+            StatusOverlayController.shared.show("伴随应用未连接", isError: true)
+        }
+    }
+
+    private func clearAskConversation() async {
+        let connected = await bridge.ensureConnected(launchCompanionIfNeeded: true)
+        guard connected else {
+            StatusOverlayController.shared.show("请先打开粤英语音伴随应用", isError: true)
+            return
+        }
+        do {
+            let response = try await bridge.send(.clearAskConversation)
+            applyPolishState(from: response.response.status)
+            askFollowUpAvailable = false
+            askFollowUpArmed = false
+            StatusOverlayController.shared.show(response.response.message ?? "已开始新的问答")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                StatusOverlayController.shared.hide()
+            }
+        } catch {
+            StatusOverlayController.shared.show("伴随应用未连接", isError: true)
         }
     }
 
@@ -359,7 +447,7 @@ final class VoicePolishInputController: IMKInputController {
                     await MainActor.run {
                         StatusOverlayController.shared.show(msg, isError: true)
                     }
-                case .text:
+                case .draft, .text:
                     break
                 }
             } catch {
@@ -381,6 +469,11 @@ final class VoicePolishInputController: IMKInputController {
                 switch response.response.outcome {
                 case .text:
                     let text = response.response.text ?? ""
+                    await deliver(text: text, boundSession: boundSession, client: clientAtStart)
+                case .draft:
+                    // Candidate review is an iOS keyboard feature. Keep macOS
+                    // compatible if an iOS-originated job is ever observed.
+                    let text = response.response.draft?.text ?? ""
                     await deliver(text: text, boundSession: boundSession, client: clientAtStart)
                 case .error, .unauthorized:
                     let msg = response.response.message ?? "识别失败"
@@ -441,9 +534,17 @@ final class VoicePolishInputController: IMKInputController {
             do {
                 let response = try await bridge.send(.status, jobID: jobID)
                 if response.response.outcome == .text {
+                    if let status = response.response.status {
+                        applyPolishState(from: status)
+                    }
                     return response.response.text
                 }
                 if response.response.outcome == .error {
+                    let message = response.response.message ?? "处理失败"
+                    if let status = response.response.status {
+                        applyPolishState(from: status)
+                    }
+                    StatusOverlayController.shared.show(message, isError: true)
                     return nil
                 }
                 if let status = response.response.status {

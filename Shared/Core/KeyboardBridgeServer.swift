@@ -149,6 +149,15 @@ actor KeyboardBridgeServer {
             let requestedJobID = message.jobID
             if let outcome = await coordinator.takeJobOutcome(jobID: requestedJobID) {
                 switch outcome {
+                case .draft(let draft):
+                    let status = await coordinator.statusForJob(requestedJobID)
+                    BridgeServer.send(
+                        response: WireResponse(
+                            requestID: message.requestID,
+                            response: .draft(draft, status: status, jobID: requestedJobID)
+                        ),
+                        over: connection
+                    )
                 case .text(let text):
                     let status = await coordinator.currentStatus
                     BridgeServer.send(
@@ -299,6 +308,77 @@ actor KeyboardBridgeServer {
                     over: connection
                 )
             }
+        case .armAskFollowUp:
+            let ok = await coordinator.armAskFollowUp()
+            let status = await coordinator.currentStatus
+            if ok {
+                BridgeServer.send(
+                    response: WireResponse(
+                        requestID: message.requestID,
+                        response: .ok(status: status, message: "追问已就绪 · 按住说话")
+                    ),
+                    over: connection
+                )
+            } else {
+                BridgeServer.send(
+                    response: WireResponse(
+                        requestID: message.requestID,
+                        response: .error("暂无可以追问的问答上下文", status: status, code: .unknown)
+                    ),
+                    over: connection
+                )
+            }
+        case .clearAskConversation:
+            await coordinator.clearAskConversation()
+            let status = await coordinator.currentStatus
+            BridgeServer.send(
+                response: WireResponse(
+                    requestID: message.requestID,
+                    response: .ok(status: status, message: "已开始新的问答")
+                ),
+                over: connection
+            )
+        case .confirmDraft:
+            guard let jobID = message.jobID, let text = message.draftText else {
+                BridgeServer.send(
+                    response: WireResponse(
+                        requestID: message.requestID,
+                        response: .error("缺少候选词确认内容", code: .unknown)
+                    ),
+                    over: connection
+                )
+                return
+            }
+            let confirmed = await coordinator.confirmDraft(jobID: jobID, text: text)
+            let status = await coordinator.statusForJob(jobID)
+            BridgeServer.send(
+                response: WireResponse(
+                    requestID: message.requestID,
+                    response: confirmed
+                        ? .ok(status: status, message: "候选词已确认", jobID: jobID)
+                        : .error("候选词已失效", status: status, code: .unknown, jobID: jobID)
+                ),
+                over: connection
+            )
+        case .abandonDraft:
+            guard let jobID = message.jobID else {
+                BridgeServer.send(
+                    response: WireResponse(requestID: message.requestID, response: .error("缺少草稿编号", code: .unknown)),
+                    over: connection
+                )
+                return
+            }
+            let released = await coordinator.abandonDraft(jobID: jobID)
+            let status = await coordinator.statusForJob(jobID)
+            BridgeServer.send(
+                response: WireResponse(
+                    requestID: message.requestID,
+                    response: released
+                        ? .ok(status: status, message: "已提交原始语音")
+                        : .error("草稿已失效", status: status, code: .unknown)
+                ),
+                over: connection
+            )
         }
     }
 }
