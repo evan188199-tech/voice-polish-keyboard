@@ -17,12 +17,6 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
-        // A third-party keyboard cannot safely replace text after its host
-        // cursor has moved. Commit the marked raw draft and release the job.
-        if viewModel.activeDraft != nil {
-            textDocumentProxy.unmarkText()
-            Task { await viewModel.abandonActiveDraft() }
-        }
         viewModel.disconnect()
     }
 
@@ -38,15 +32,8 @@ final class KeyboardViewController: UIInputViewController {
             onReturn: { [weak self] in
                 self?.textDocumentProxy.insertText("\n")
             },
-            onSetMarkedText: { [weak self] text in
-                guard let self else { return }
-                self.textDocumentProxy.setMarkedText(
-                    text,
-                    selectedRange: NSRange(location: text.utf16.count, length: 0)
-                )
-            },
-            onUnmarkText: { [weak self] in
-                self?.textDocumentProxy.unmarkText()
+            onActivateSession: { [weak self] in
+                self?.openHostAndActivateSession()
             }
         )
 
@@ -63,5 +50,80 @@ final class KeyboardViewController: UIInputViewController {
         ])
         host.didMove(toParent: self)
         self.host = host
+    }
+
+    private func openHostAndActivateSession() {
+        var components = URLComponents()
+        components.scheme = "voicepolish"
+        components.host = "activate-session"
+        var queryItems = [URLQueryItem(name: "return", value: "keyboard-host")]
+        if let hostBundleID = keyboardHostBundleIdentifier() {
+            queryItems.append(URLQueryItem(name: "hostBundleID", value: hostBundleID))
+        }
+        components.queryItems = queryItems
+
+        guard let url = components.url else {
+            return
+        }
+        extensionContext?.open(url) { [weak self] opened in
+            guard !opened else { return }
+            Task { @MainActor in
+                self?.openURLThroughResponderChain(url)
+            }
+        }
+    }
+
+    /// Best-effort private probe. There is no public host-app API for third-party
+    /// keyboards, but the host identifier is available on the presentation parent
+    /// or extension context on current iOS releases.
+    private func keyboardHostBundleIdentifier() -> String? {
+        var objects: [NSObject] = []
+        if let parent {
+            objects.append(parent)
+        }
+        if let extensionContext {
+            objects.append(extensionContext)
+        }
+        let selectorNames = [
+            "_hostBundleID",
+            "hostBundleID",
+            "_hostBundleIdentifier",
+            "hostBundleIdentifier",
+            "_hostIdentifier",
+            "hostIdentifier"
+        ]
+
+        for object in objects {
+            for name in selectorNames {
+                let selector = NSSelectorFromString(name)
+                guard object.responds(to: selector),
+                      let value = object.perform(selector)?.takeUnretainedValue() as? String
+                else { continue }
+                if isUsableHostBundleIdentifier(value) {
+                    return value
+                }
+            }
+        }
+        return nil
+    }
+
+    private func isUsableHostBundleIdentifier(_ value: String) -> Bool {
+        value.contains(".")
+            && value != "com.voicepolish.app"
+            && value != "com.voicepolish.app.keyboard"
+            && !value.hasPrefix("com.apple.UIKit")
+    }
+
+    /// Fallback for iOS builds that reject NSExtensionContext.open(_:).
+    private func openURLThroughResponderChain(_ url: URL) {
+        let selector = NSSelectorFromString("openURL:")
+        var responder: UIResponder? = self
+        while let current = responder {
+            if current.responds(to: selector) {
+                current.perform(selector, with: url)
+                return
+            }
+            responder = current.next
+        }
     }
 }

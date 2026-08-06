@@ -1,7 +1,8 @@
 import Foundation
 
 /// Tracks the next sequence number that may be delivered to clients.
-/// Cloud jobs may finish out of order; insertion stays strictly sequential.
+/// Cloud jobs may finish out of order; insertion stays strictly sequential
+/// within a single pipeline generation.
 struct OrderedDeliveryCursor: Equatable, Sendable {
     private(set) var nextSequence: UInt64 = 1
 
@@ -34,10 +35,10 @@ enum VoiceJobStatusText {
             base = "识别中…"
         case .queuedPolish, .polishing:
             base = polishMode.processingStatusMessage
-        case .awaitingReview:
-            base = "待确认候选词"
         case .ready:
-            base = "待插入…"
+            base = "就绪"
+        case .discarded:
+            base = "已丢弃"
         case .failed:
             base = "处理失败"
         }
@@ -53,7 +54,7 @@ enum VoiceJobPhase: String, Equatable, Sendable {
     case transcribing
     case queuedPolish
     case polishing
-    case awaitingReview
     case ready
+    case discarded
     case failed
 }

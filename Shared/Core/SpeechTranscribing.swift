@@ -88,9 +88,10 @@ actor SenseVoiceTranscriber: SpeechTranscribing {
             }
         }
 
-        // Smart join for VAD chunks (Chinese bare boundaries get `。`).
+        // Process each VAD chunk independently so spoken-letter collapsing
+        // respects pause boundaries, then smart-join the cleaned segments.
         // Cloud polish later keeps LLM output as-is; this only shapes local ASR text.
-        let joined = LocalTextProcessor.joinTranscriptSegments(texts)
+        let joined = LocalTextProcessor.processSegments(texts, vocabulary: vocabulary)
         guard !joined.isEmpty else { throw TranscriberError.noText }
         return joined
     }

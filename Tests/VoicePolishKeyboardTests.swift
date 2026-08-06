@@ -46,51 +46,9 @@ final class VoicePolishKeyboardTests: XCTestCase {
         XCTAssertNil(response.errorCode)
     }
 
-    func testDraftResponseAndConfirmWireRoundtrip() throws {
-        let jobID = UUID()
-        let draft = VoiceDraft(
-            id: jobID,
-            text: "我想去深圳",
-            candidateGroups: [
-                CandidateGroup(range: UTF16TextRange(location: 4, length: 1), alternatives: ["证"])
-            ]
-        )
-        let response = BridgeResponse.draft(draft, jobID: jobID)
-        XCTAssertEqual(response.outcome, .draft)
-        XCTAssertEqual(response.draft, draft)
 
-        let message = WireMessage(command: .confirmDraft, token: "test", jobID: jobID, draftText: draft.text)
-        let decoded = try JSONDecoder().decode(WireMessage.self, from: JSONEncoder().encode(message))
-        XCTAssertEqual(decoded.command, .confirmDraft)
-        XCTAssertEqual(decoded.jobID, jobID)
-        XCTAssertEqual(decoded.draftText, draft.text)
-    }
 
-    func testCandidateBuilderCreatesChineseReplacement() {
-        let draft = VoiceCandidateBuilder.makeDraft(
-            source: "我想去深圳",
-            hypotheses: [AppleSpeechHypothesis(text: "我想去深证", confidence: 0.8, rank: 0)]
-        )
-        XCTAssertEqual(draft?.candidateGroups.count, 1)
-        XCTAssertEqual(draft?.candidateGroups.first?.range, UTF16TextRange(location: 4, length: 1))
-        XCTAssertEqual(draft?.candidateGroups.first?.alternatives, ["证"])
-    }
 
-    func testCandidateBuilderUsesUTF16RangesForEmoji() {
-        let draft = VoiceCandidateBuilder.makeDraft(
-            source: "我😀去深圳",
-            hypotheses: [AppleSpeechHypothesis(text: "我😀去深证", confidence: 0.9, rank: 0)]
-        )
-        XCTAssertEqual(draft?.candidateGroups.first?.range, UTF16TextRange(location: 5, length: 1))
-    }
-
-    func testCandidateBuilderSkipsPunctuationOnlyDifference() {
-        let draft = VoiceCandidateBuilder.makeDraft(
-            source: "你好。",
-            hypotheses: [AppleSpeechHypothesis(text: "你好！", confidence: 0.8, rank: 0)]
-        )
-        XCTAssertNil(draft)
-    }
 
     func testBridgeResponseErrorCode() {
         let response = BridgeResponse.error("denied", code: .micDenied)
@@ -153,10 +111,24 @@ final class VoicePolishKeyboardTests: XCTestCase {
         XCTAssertTrue(sentenceStart.contains("macOS"), sentenceStart)
     }
 
+    func testLocalTextProcessorPreservesIPhoneAirCasing() {
+        XCTAssertEqual(
+            LocalTextProcessor.process("UPDATE TO IPHONE AIR", vocabulary: ""),
+            "Update to iPhone Air"
+        )
+    }
+
     func testLocalTextProcessorRestoresPronounI() {
         let out = LocalTextProcessor.process("I THINK I NEED HELP", vocabulary: "")
         // All-caps "I" stays; other words lowercased + sentence capital.
         XCTAssertTrue(out.contains("I think I need help") || out == "I think I need help")
+    }
+
+    func testLocalTextProcessorCollapsesSpokenEnglishLetters() {
+        XCTAssertEqual(LocalTextProcessor.process("A B C", vocabulary: ""), "ABC")
+        XCTAssertEqual(LocalTextProcessor.process("connect to U S B now", vocabulary: ""), "Connect to USB now")
+        XCTAssertEqual(LocalTextProcessor.process("I am ready", vocabulary: ""), "I am ready")
+        XCTAssertEqual(LocalTextProcessor.process("open E U P B", vocabulary: "EUPB"), "open EUPB")
     }
 
     func testJoinTranscriptSegmentsChineseBareGetsPeriod() {
@@ -225,6 +197,53 @@ final class VoicePolishKeyboardTests: XCTestCase {
         XCTAssertTrue(mixed.contains("API"))
         XCTAssertTrue(mixed.contains("deploy"))
         XCTAssertFalse(mixed.contains("API然后") || mixed.contains("APdeploy"))
+    }
+
+    func testLocalTextProcessorConvertsSpokenChineseDigitRuns() {
+        XCTAssertEqual(LocalTextProcessor.process("一二三四", vocabulary: ""), "1234")
+        XCTAssertEqual(LocalTextProcessor.process("八零八零", vocabulary: ""), "8080")
+        XCTAssertEqual(LocalTextProcessor.process("房间八零八零", vocabulary: ""), "房间8080")
+        XCTAssertEqual(LocalTextProcessor.process("编号：一二三，谢谢", vocabulary: ""), "编号：123，谢谢")
+    }
+
+    func testLocalTextProcessorConvertsChineseIntegersWithUnits() {
+        XCTAssertEqual(LocalTextProcessor.process("十一", vocabulary: ""), "11")
+        XCTAssertEqual(LocalTextProcessor.process("一百二十三", vocabulary: ""), "123")
+        XCTAssertEqual(LocalTextProcessor.process("一万零三", vocabulary: ""), "10003")
+        XCTAssertEqual(LocalTextProcessor.process("两百", vocabulary: ""), "200")
+        XCTAssertEqual(LocalTextProcessor.process("兩百零一", vocabulary: ""), "201")
+        XCTAssertEqual(LocalTextProcessor.process("一萬零三", vocabulary: ""), "10003")
+        XCTAssertEqual(LocalTextProcessor.process("一共一百二十三人", vocabulary: ""), "一共123人")
+    }
+
+    func testLocalTextProcessorKeepsIsolatedChineseNumerals() {
+        XCTAssertEqual(LocalTextProcessor.process("一心一意", vocabulary: ""), "一心一意")
+        XCTAssertEqual(LocalTextProcessor.process("一", vocabulary: ""), "一")
+        XCTAssertEqual(LocalTextProcessor.process("两个人", vocabulary: ""), "两个人")
+        XCTAssertEqual(LocalTextProcessor.process("第3章有12页", vocabulary: ""), "第3章有12页")
+    }
+
+    func testLocalTextProcessorProcessSegmentsRespectsLetterPauses() {
+        // Same segment: spoken letters collapse.
+        XCTAssertEqual(
+            LocalTextProcessor.processSegments(["C O D E X"], vocabulary: ""),
+            "CODEX"
+        )
+        // Different VAD segments: do not collapse across the pause.
+        XCTAssertEqual(
+            LocalTextProcessor.processSegments(["A B", "C D"], vocabulary: ""),
+            "AB CD"
+        )
+        // Normal English words keep their spaces.
+        XCTAssertEqual(
+            LocalTextProcessor.processSegments(["hello world"], vocabulary: ""),
+            "Hello world"
+        )
+        // Numbers also normalize per segment before join.
+        XCTAssertEqual(
+            LocalTextProcessor.processSegments(["编号一二三四", "一共十一份"], vocabulary: ""),
+            "编号1234 一共11份"
+        )
     }
 
     func testConstants() {
@@ -696,13 +715,43 @@ final class VoicePolishKeyboardTests: XCTestCase {
         XCTAssertTrue(msg.contains("2"))
     }
 
-    func testReadyPhaseStatusTextPendingInsert() {
+    func testReadyPhaseStatusTextIsReady() {
         let msg = VoiceJobStatusText.processingMessage(
             phase: .ready,
             polishMode: .coding,
             pendingCount: 1
         )
-        XCTAssertEqual(msg, "待插入…")
+        XCTAssertEqual(msg, "就绪")
+    }
+
+    func testDiscardedPhaseStatusText() {
+        let msg = VoiceJobStatusText.processingMessage(
+            phase: .discarded,
+            polishMode: .rewrite,
+            pendingCount: 1
+        )
+        XCTAssertEqual(msg, "已丢弃")
+    }
+
+    func testBridgeResponseDiscardedErrorCode() {
+        let response = BridgeResponse.error("已丢弃", code: .discarded, jobID: UUID())
+        XCTAssertEqual(response.outcome, .error)
+        XCTAssertEqual(response.errorCode, .discarded)
+    }
+
+    func testProtocolVersionIsThree() {
+        XCTAssertEqual(AppConstants.protocolVersion, 3)
+        let message = WireMessage(command: .ping, token: "test")
+        XCTAssertEqual(message.protocolVersion, 3)
+    }
+
+    func testOrderedDeliveryCursorResetToSequence() {
+        var cursor = OrderedDeliveryCursor()
+        cursor.advance()
+        cursor.advance()
+        cursor.reset(to: 5)
+        XCTAssertTrue(cursor.canDeliver(sequence: 5))
+        XCTAssertFalse(cursor.canDeliver(sequence: 1))
     }
 
     func testAskAnswerParserAcceptsJSONAndFencedJSON() throws {
@@ -809,6 +858,35 @@ final class VoicePolishKeyboardTests: XCTestCase {
         XCTAssertTrue(AudioRouteRecoveryPolicy.canRetry(attempt: 0, maxAttempts: 3))
         XCTAssertTrue(AudioRouteRecoveryPolicy.canRetry(attempt: 2, maxAttempts: 3))
         XCTAssertFalse(AudioRouteRecoveryPolicy.canRetry(attempt: 3, maxAttempts: 3))
+
+        XCTAssertEqual(
+            AudioRouteRecoveryPolicy.retryDelayNanoseconds(
+                attempt: 1,
+                baseDelayNanoseconds: 250_000_000
+            ),
+            250_000_000
+        )
+        XCTAssertEqual(
+            AudioRouteRecoveryPolicy.retryDelayNanoseconds(
+                attempt: 3,
+                baseDelayNanoseconds: 250_000_000
+            ),
+            1_000_000_000
+        )
+        XCTAssertEqual(
+            AudioRouteRecoveryPolicy.retryDelayNanoseconds(
+                attempt: 4,
+                baseDelayNanoseconds: 250_000_000
+            ),
+            2_000_000_000
+        )
+        XCTAssertEqual(
+            AudioRouteRecoveryPolicy.retryDelayNanoseconds(
+                attempt: 5,
+                baseDelayNanoseconds: 250_000_000
+            ),
+            2_000_000_000
+        )
     }
 
     func testAudioCaptureSinkRebuildsConverterAcrossFormats() throws {

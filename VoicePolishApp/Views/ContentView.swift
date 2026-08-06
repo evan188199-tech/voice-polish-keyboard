@@ -161,7 +161,7 @@ struct ContentView: View {
                 HStack(spacing: 8) {
                     Image(systemName: "dot.radiowaves.left.and.right")
                         .foregroundStyle(.orange)
-                    Text("语音会话运行中：麦克风会话与键盘桥接已开启。不用时请关闭。")
+                    Text("语音会话运行中：麦克风与桥接已开启。\(idleSessionHint)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer(minLength: 0)
@@ -275,6 +275,14 @@ struct ContentView: View {
                 .disabled(activating)
             }
         }
+    }
+
+    private var idleSessionHint: String {
+        if settings.sessionIdleTimeoutEnabled {
+            let minutes = max(1, Int(settings.sessionIdleTimeoutSeconds) / 60)
+            return "约 \(minutes) 分钟无按住说话会自动关闭。"
+        }
+        return "不用时请手动关闭。"
     }
 
     private var isSessionLive: Bool {

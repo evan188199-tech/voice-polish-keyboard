@@ -177,13 +177,6 @@ struct SettingsView: View {
                 }
 
 
-                Section {
-                    Toggle("语音候选词", isOn: $settings.voiceCandidateReviewEnabled)
-                } header: {
-                    Text("键盘语音输入")
-                } footer: {
-                    Text("开启后会并行使用系统端侧听写为不确定的词提供候选。候选仅在键盘中显示，确认后才会进入润色。需要系统语音识别权限和对应语言的离线听写。")
-                }
 
                 Section {
                     Toggle("对照测试 · 系统听写", isOn: $settings.compareWithSystemDictation)
@@ -206,8 +199,25 @@ struct SettingsView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                    Toggle("空闲自动关闭", isOn: $settings.sessionIdleTimeoutEnabled)
+                    if settings.sessionIdleTimeoutEnabled {
+                        Stepper(
+                            value: $settings.sessionIdleTimeoutSeconds,
+                            in: AppConstants.minimumSessionIdleTimeoutSeconds...AppConstants.absoluteMaxSessionIdleTimeoutSeconds,
+                            step: 60
+                        ) {
+                            HStack {
+                                Text("空闲超时")
+                                Spacer()
+                                Text(idleTimeoutLabel)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
                 } header: {
-                    Text("录音")
+                    Text("录音与会话")
+                } footer: {
+                    Text("超过设定时间没有按住说话，将自动关闭语音会话，释放麦克风并停止桥接。快捷指令启动会话后同样生效。")
                 }
 
                 Section {
@@ -235,6 +245,14 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    private var idleTimeoutLabel: String {
+        let minutes = Int(settings.sessionIdleTimeoutSeconds) / 60
+        if minutes <= 0 {
+            return "\(Int(settings.sessionIdleTimeoutSeconds)) 秒"
+        }
+        return "\(minutes) 分钟"
     }
 
     private func loadDraftFromSettings() {

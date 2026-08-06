@@ -1,7 +1,7 @@
 import Foundation
 
 enum AppConstants {
-    static let protocolVersion: UInt16 = 2
+    static let protocolVersion: UInt16 = 3
     static let bridgePorts: [UInt16] = [52741, 52742, 52743]
     static let polishingTimeout: TimeInterval = 8
     /// Short timeout used by settings "test model" probe.
@@ -12,14 +12,16 @@ enum AppConstants {
     static let localASRConcurrency = 1
     /// Cloud polish jobs may run in parallel up to this limit.
     static let cloudPolishConcurrency = 2
-    /// Candidate recognition may lag the primary local ASR, but must never make
-    /// an ordinary dictation wait indefinitely.
-    static let candidateRecognitionGracePeriod: TimeInterval = 1.5
-
     /// Default maximum recording duration (seconds).
     static let defaultMaxRecordingDuration: TimeInterval = 60
     /// Hard cap: user may configure up to this value.
     static let absoluteMaxRecordingDuration: TimeInterval = 90
+
+    /// iOS: auto-deactivate voice session after this much idle time (no hold-to-talk).
+    static let defaultSessionIdleTimeoutSeconds: TimeInterval = 300
+    /// Minimum / maximum configurable idle timeout.
+    static let minimumSessionIdleTimeoutSeconds: TimeInterval = 60
+    static let absoluteMaxSessionIdleTimeoutSeconds: TimeInterval = 1800
 
     /// Recordings longer than this use VAD chunking.
     static let vadChunkThreshold: TimeInterval = 25

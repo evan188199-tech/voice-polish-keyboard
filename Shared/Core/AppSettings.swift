@@ -62,6 +62,20 @@ final class AppSettings: ObservableObject {
             save()
         }
     }
+    /// iOS: auto-close voice session after idle (no hold-to-talk). macOS companion ignores this.
+    @Published var sessionIdleTimeoutEnabled: Bool {
+        didSet {
+            guard isLoaded else { return }
+            save()
+        }
+    }
+    /// Idle seconds before auto deactivate. Default 300 (5 minutes).
+    @Published var sessionIdleTimeoutSeconds: TimeInterval {
+        didSet {
+            guard isLoaded else { return }
+            save()
+        }
+    }
     /// When false, skip polish API and insert local transcription only.
     @Published var polishEnabled: Bool {
         didSet {
@@ -79,13 +93,6 @@ final class AppSettings: ObservableObject {
     /// iOS main app only: run Apple on-device dictation in parallel for A/B comparison.
     /// Default off; keyboard/IME insert path always uses SenseVoice only.
     @Published var compareWithSystemDictation: Bool {
-        didSet {
-            guard isLoaded else { return }
-            save()
-        }
-    }
-    /// iOS keyboard: offer Apple on-device alternatives before optional polish.
-    @Published var voiceCandidateReviewEnabled: Bool {
         didSet {
             guard isLoaded else { return }
             save()
@@ -129,6 +136,20 @@ final class AppSettings: ObservableObject {
         customVocabulary = defaults.string(forKey: "custom_vocabulary") ?? ""
         let duration = defaults.double(forKey: "max_recording_duration")
         maxRecordingDuration = duration > 0 ? duration : AppConstants.defaultMaxRecordingDuration
+        if defaults.object(forKey: "session_idle_timeout_enabled") == nil {
+            sessionIdleTimeoutEnabled = true
+        } else {
+            sessionIdleTimeoutEnabled = defaults.bool(forKey: "session_idle_timeout_enabled")
+        }
+        let idle = defaults.double(forKey: "session_idle_timeout_seconds")
+        if idle > 0 {
+            sessionIdleTimeoutSeconds = min(
+                max(idle, AppConstants.minimumSessionIdleTimeoutSeconds),
+                AppConstants.absoluteMaxSessionIdleTimeoutSeconds
+            )
+        } else {
+            sessionIdleTimeoutSeconds = AppConstants.defaultSessionIdleTimeoutSeconds
+        }
         if defaults.object(forKey: "polish_enabled") == nil {
             polishEnabled = true
         } else {
@@ -144,11 +165,6 @@ final class AppSettings: ObservableObject {
             compareWithSystemDictation = false
         } else {
             compareWithSystemDictation = defaults.bool(forKey: "compare_with_system_dictation")
-        }
-        if defaults.object(forKey: "voice_candidate_review_enabled") == nil {
-            voiceCandidateReviewEnabled = true
-        } else {
-            voiceCandidateReviewEnabled = defaults.bool(forKey: "voice_candidate_review_enabled")
         }
         if defaults.object(forKey: "launch_at_login") == nil {
             launchAtLogin = true
@@ -348,10 +364,11 @@ final class AppSettings: ObservableObject {
         defaults.set(modelName, forKey: "api_model_name")
         defaults.set(customVocabulary, forKey: "custom_vocabulary")
         defaults.set(maxRecordingDuration, forKey: "max_recording_duration")
+        defaults.set(sessionIdleTimeoutEnabled, forKey: "session_idle_timeout_enabled")
+        defaults.set(sessionIdleTimeoutSeconds, forKey: "session_idle_timeout_seconds")
         defaults.set(polishEnabled, forKey: "polish_enabled")
         defaults.set(polishMode.rawValue, forKey: "polish_mode")
         defaults.set(compareWithSystemDictation, forKey: "compare_with_system_dictation")
-        defaults.set(voiceCandidateReviewEnabled, forKey: "voice_candidate_review_enabled")
         defaults.set(launchAtLogin, forKey: "launch_at_login")
         defaults.set(rightOptionHotkeyEnabled, forKey: "right_option_hotkey_enabled")
         defaults.set(chineseScript.rawValue, forKey: "chinese_script")

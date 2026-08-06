@@ -11,16 +11,38 @@ import AudioToolbox
 /// changes the engine is rebuilt after a short settle delay so capture can recover.
 @MainActor
 final class AudioRecorder {
-    private let engine = AVAudioEngine()
+    private var engine = AVAudioEngine()
     private let targetFormat: AVAudioFormat?
     private let sink = AudioCaptureSink()
     private var sessionActive = false
     private var isRecovering = false
     private var recoveryTask: Task<Void, Never>?
     private var recoveryAttempts = 0
-    private let maxRecoveryAttempts = 3
+    // Headset/HFP hardware comes online asynchronously.  A single short wait
+    // is not enough on real devices (and commonly results in AVFAudio -10868).
+    private let maxRecoveryAttempts = 8
     private let settleNanoseconds: UInt64 = 250_000_000
+    /// Device-removal notifications arrive before the replacement input is
+    /// fully usable; give the built-in microphone a longer initial grace time.
+    private let routeChangeSettleNanoseconds: UInt64 = 1_000_000_000
+    /// After deactivating the session, Core Audio still needs a beat before the
+    /// next `setActive(true)` can bind a fresh input unit.
+    private let postDeactivateSettleNanoseconds: UInt64 = 200_000_000
+    /// `setActive(true)` may return before a just-connected/disconnected HFP
+    /// route has a usable input format. Starting the input AU in that window
+    /// commonly yields AVFAudio -10868 (`kAudioUnitErr_FormatNotSupported`).
+    private let activationSettleNanoseconds: UInt64 = 200_000_000
+    /// Poll window while waiting for `currentRoute.inputs` after activation.
+    private let routeUsablePollNanoseconds: UInt64 = 100_000_000
+    private let routeUsableMaxWaitNanoseconds: UInt64 = 2_000_000_000
     private var observers: [NSObjectProtocol] = []
+#if os(iOS)
+    /// Some media apps do not emit a silence-secondary-audio notification when
+    /// our mixed recording session is already active. Poll the corresponding
+    /// session property as a fallback so playback still releases the mic.
+    private var systemAudioMonitorTask: Task<Void, Never>?
+    private var wasOtherPrimaryAudioPlaying = false
+#endif
     /// Suppresses observer-driven rebuilds while we are already rebuilding.
     private var isApplyingRebuild = false
     /// Rebuild operations emit their own configuration notifications after the
@@ -43,6 +65,12 @@ final class AudioRecorder {
     var onInputRecoverySucceeded: ((String) -> Void)?
     /// Fired after retries are exhausted for the current disruption.
     var onInputRecoveryFailed: ((Error) -> Void)?
+#if os(iOS)
+    /// Fired when another app starts primary audio playback. The coordinator
+    /// uses this to release the microphone instead of keeping a mixed voice
+    /// session alive underneath the system audio.
+    var onSystemAudioPlaybackStarted: (() -> Void)?
+#endif
 
     var elapsed: TimeInterval { sink.elapsed }
     var recordedData: Data { sink.snapshot() }
@@ -59,21 +87,56 @@ final class AudioRecorder {
         )
     }
 
-    func startSession() throws {
+    func startSession() async throws {
         guard !sessionActive else { return }
         guard let targetFormat else {
             throw RecorderError.invalidTargetFormat
         }
-#if os(iOS)
-        try configureAudioSession()
-#endif
+
         sink.configure(targetFormat: targetFormat)
-        try attachEngine()
+        // Install once for the whole start attempt. sessionActive stays false until
+        // attach succeeds, so engine-config callbacks cannot rebuild mid-start.
         installObservers()
-        sessionActive = true
-        isInputReady = true
+
+        var lastError: Error?
+        for attempt in 1...maxRecoveryAttempts {
+            do {
+#if os(iOS)
+                // Re-assert category on every attempt so a mid-start route change
+                // (wired headset / AirPods HFP) can settle into the session.
+                try configureAudioSession()
+                // First attempt can be light; later attempts full-recycle the session.
+                try await waitForInputRouteToSettle(fullRecycle: attempt > 1)
+#endif
+                teardownEngine()
+                try attachEngine()
+                sessionActive = true
+                isInputReady = true
+                recoveryAttempts = 0
+                publishInputName(resolveInputName())
+#if os(iOS)
+                startSystemAudioMonitor()
+#endif
+                return
+            } catch {
+                lastError = error
+                // An input AudioUnit which failed to start is not reliably
+                // reusable after an HFP route transition. Reset it and release
+                // the session before trying again.
+                teardownEngine()
+#if os(iOS)
+                deactivateAudioSessionForRetry()
+#endif
+                if attempt < maxRecoveryAttempts {
+                    try? await Task.sleep(nanoseconds: recoveryDelay(for: attempt))
+                }
+            }
+        }
+
+        removeObservers()
+        isInputReady = false
         recoveryAttempts = 0
-        publishInputName(resolveInputName())
+        throw lastError ?? RecorderError.noInput
     }
 
     func stopSession() {
@@ -96,14 +159,15 @@ final class AudioRecorder {
     }
 
     /// Reconcile stale recovery flags when the user actually requests capture.
+    /// Never force a synchronous rebuild: route transitions need an async settle
+    /// window, and a rushed `engine.start()` is a common source of -10868.
     func ensureInputReadyForRecording() -> Bool {
         guard sessionActive else { return false }
+        if isRecovering {
+            return false
+        }
 
-        let format = engine.inputNode.inputFormat(forBus: 0)
-        let formatIsUsable = format.sampleRate.isFinite
-            && format.sampleRate > 0
-            && format.channelCount > 0
-        if engine.isRunning, formatIsUsable {
+        if hasUsableRunningEngine() {
             recoveryTask?.cancel()
             recoveryTask = nil
             recoveryAttempts = 0
@@ -112,10 +176,8 @@ final class AudioRecorder {
             return true
         }
 
-        recoveryTask?.cancel()
-        recoveryTask = nil
-        rebuildEngine(reason: "recording-demand")
-        return engine.isRunning && isInputReady && !isRecovering
+        scheduleRebuild(reason: "recording-demand")
+        return false
     }
 
     func finishRecording() -> Data {
@@ -135,7 +197,7 @@ final class AudioRecorder {
         // Do not force a preferred sample rate — convert from the live route format.
         try session.setCategory(
             .playAndRecord,
-            mode: .measurement,
+            mode: .spokenAudio,
             options: [.allowBluetoothHFP, .defaultToSpeaker, .mixWithOthers]
         )
         try session.setActive(true, options: [])
@@ -143,6 +205,59 @@ final class AudioRecorder {
             try? session.setActive(false, options: [.notifyOthersOnDeactivation])
             throw RecorderError.noInput
         }
+    }
+
+    /// Release a partially activated route between failed start attempts.
+    /// In particular, this lets iOS finish promoting a Bluetooth device from
+    /// its playback profile to HFP before AVAudioEngine opens the input unit.
+    private func deactivateAudioSessionForRetry() {
+        try? AVAudioSession.sharedInstance().setActive(false, options: [])
+    }
+
+    /// Bluetooth connect/disconnect promotion is asynchronous. Wait until the
+    /// session reports an available input route before opening the input unit.
+    private func waitForInputRouteToSettle(fullRecycle: Bool = false) async throws {
+        if fullRecycle {
+            // Drop the previous HFP/built-in binding entirely, then reactivate.
+            deactivateAudioSessionForRetry()
+            try await Task.sleep(nanoseconds: postDeactivateSettleNanoseconds)
+            try configureAudioSession()
+        }
+        try await Task.sleep(nanoseconds: activationSettleNanoseconds)
+        try await waitUntilRouteLooksUsable()
+    }
+
+    /// Poll until iOS surfaces at least one input port after activation.
+    private func waitUntilRouteLooksUsable() async throws {
+        let session = AVAudioSession.sharedInstance()
+        let maxAttempts = Int(routeUsableMaxWaitNanoseconds / max(routeUsablePollNanoseconds, 1))
+        for attempt in 0..<max(maxAttempts, 1) {
+            if Task.isCancelled { throw CancellationError() }
+            if session.isInputAvailable, !session.currentRoute.inputs.isEmpty {
+                return
+            }
+            if attempt + 1 < maxAttempts {
+                try await Task.sleep(nanoseconds: routeUsablePollNanoseconds)
+            }
+        }
+        guard session.isInputAvailable else {
+            throw RecorderError.noInput
+        }
+        // Input available but route ports still empty — let attachEngine probe formats.
+    }
+
+    private func shouldFullRecycleSession(for reason: String) -> Bool {
+        if reason.hasPrefix("retry-") {
+            // Escalating retries: full recycle from the 2nd retry onward.
+            return recoveryAttempts >= 2
+        }
+        if reason.hasPrefix("route-") || reason == "media-reset" || reason == "recording-demand" {
+            return true
+        }
+        if reason.hasPrefix("interruption-") {
+            return true
+        }
+        return false
     }
 #endif
 
@@ -201,53 +316,103 @@ final class AudioRecorder {
             engine.stop()
         }
         engine.inputNode.removeTap(onBus: 0)
+        // `stop()` alone can retain the previous route's input AudioUnit and format state.
+        // Recreating AVAudioEngine is required to release stale hardware AU context
+        // and attach to newly activated route format, preventing AVFAudio error -10868.
+        engine.reset()
+        engine = AVAudioEngine()
         sink.prepareForEngineAttach()
     }
 
-    private func rebuildEngine(reason: String) {
-        guard sessionActive else { return }
-        guard !isApplyingRebuild else { return }
+    private func recoveryDelay(for attempt: Int) -> UInt64 {
+        AudioRouteRecoveryPolicy.retryDelayNanoseconds(
+            attempt: attempt,
+            baseDelayNanoseconds: settleNanoseconds
+        )
+    }
 
-        let wasCapturing = sink.isActivelyRecording
-        if wasCapturing {
-            // Never splice audio from two devices into one segment.
+    private func hasUsableRunningEngine() -> Bool {
+        guard engine.isRunning else { return false }
+        let format = engine.inputNode.inputFormat(forBus: 0)
+        return format.sampleRate.isFinite
+            && format.sampleRate > 0
+            && format.channelCount > 0
+    }
+
+    /// Immediately mark input unusable and drop any live capture so a later
+    /// async rebuild cannot splice two devices into one segment.
+    private func beginRecoveryIfNeeded(cancelCapture: Bool) {
+        if cancelCapture, sink.isActivelyRecording {
             onCaptureInterruptedByRouteChange?()
             sink.cancelRecording()
         }
-
         if !isRecovering {
             isRecovering = true
             isInputReady = false
             onInputRecoveryStarted?()
+        } else {
+            isInputReady = false
         }
+    }
+
+    /// Release the previous input AudioUnit before the settle delay so the next
+    /// attach binds to the post-transition route instead of a stale HFP unit.
+    private func releaseEngineForRouteTransition() {
+        if engine.isRunning {
+            engine.stop()
+        }
+        engine.inputNode.removeTap(onBus: 0)
+        engine.reset()
+        engine = AVAudioEngine()
+        sink.prepareForEngineAttach()
+    }
+
+    private func rebuildEngine(reason: String) async {
+        guard sessionActive else { return }
+        guard !isApplyingRebuild else { return }
+
+        beginRecoveryIfNeeded(cancelCapture: true)
 
         isApplyingRebuild = true
         defer { isApplyingRebuild = false }
 
         do {
 #if os(iOS)
-            // Re-assert category so a newly connected HFP device can join.
-            try configureAudioSession()
+            let fullRecycle = shouldFullRecycleSession(for: reason)
+            if fullRecycle {
+                try await waitForInputRouteToSettle(fullRecycle: true)
+            } else {
+                try configureAudioSession()
+                try await waitForInputRouteToSettle(fullRecycle: false)
+            }
 #endif
             teardownEngine()
-            // Give Core Audio a beat to settle after stop before reinstalling the tap.
             try attachEngine()
-            suppressEngineConfigUntil = Date().addingTimeInterval(1)
+            guard hasUsableRunningEngine() else {
+                throw RecorderError.routeRecoveryFailed
+            }
+            suppressEngineConfigUntil = Date().addingTimeInterval(1.5)
             recoveryAttempts = 0
             isRecovering = false
             isInputReady = true
             let name = resolveInputName()
             publishInputName(name)
             onInputRecoverySucceeded?(name)
+        } catch is CancellationError {
+            return
         } catch {
             recoveryAttempts += 1
+#if os(iOS)
+            deactivateAudioSessionForRetry()
+#endif
+            releaseEngineForRouteTransition()
             if recoveryAttempts < maxRecoveryAttempts {
                 scheduleRebuild(reason: "retry-\(reason)-\(recoveryAttempts)")
             } else {
                 isRecovering = false
                 isInputReady = false
                 onInputRecoveryFailed?(error)
-                // Keep sessionActive so a later route event can still recover.
+                // Keep sessionActive so a later route event or user retry can recover.
             }
         }
     }
@@ -258,12 +423,30 @@ final class AudioRecorder {
         if !reason.hasPrefix("retry-") {
             recoveryAttempts = 0
         }
+
+        // Fail closed immediately: do not keep a dead engine "ready" during settle.
+        beginRecoveryIfNeeded(cancelCapture: true)
+        if !reason.hasPrefix("retry-") {
+            releaseEngineForRouteTransition()
+        }
+
         recoveryTask?.cancel()
+        let delay: UInt64
+        if reason.hasPrefix("retry-") {
+            delay = recoveryDelay(for: recoveryAttempts)
+        } else if reason.hasPrefix("route-") || reason == "media-reset" {
+            delay = routeChangeSettleNanoseconds
+        } else if reason == "recording-demand" {
+            // User is actively trying to talk; still wait briefly for Core Audio.
+            delay = settleNanoseconds
+        } else {
+            delay = settleNanoseconds
+        }
         recoveryTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            try? await Task.sleep(nanoseconds: self.settleNanoseconds)
+            try? await Task.sleep(nanoseconds: delay)
             guard !Task.isCancelled, self.sessionActive else { return }
-            self.rebuildEngine(reason: reason)
+            await self.rebuildEngine(reason: reason)
         }
     }
 
@@ -301,6 +484,17 @@ final class AudioRecorder {
         })
 
         observers.append(center.addObserver(
+            forName: AVAudioSession.silenceSecondaryAudioHintNotification,
+            object: session,
+            queue: .main
+        ) { [weak self] notification in
+            let hintRaw = notification.userInfo?[AVAudioSessionSilenceSecondaryAudioHintTypeKey] as? UInt
+            Task { @MainActor in
+                self?.handleSilenceSecondaryAudioHint(hintRawValue: hintRaw)
+            }
+        })
+
+        observers.append(center.addObserver(
             forName: AVAudioSession.mediaServicesWereResetNotification,
             object: session,
             queue: .main
@@ -313,7 +507,7 @@ final class AudioRecorder {
 
         observers.append(NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange,
-            object: engine,
+            object: nil,
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
@@ -331,6 +525,11 @@ final class AudioRecorder {
     }
 
     private func removeObservers() {
+#if os(iOS)
+        systemAudioMonitorTask?.cancel()
+        systemAudioMonitorTask = nil
+        wasOtherPrimaryAudioPlaying = false
+#endif
         for token in observers {
             NotificationCenter.default.removeObserver(token)
         }
@@ -341,6 +540,23 @@ final class AudioRecorder {
     }
 
 #if os(iOS)
+    private func startSystemAudioMonitor() {
+        systemAudioMonitorTask?.cancel()
+        wasOtherPrimaryAudioPlaying = false
+        systemAudioMonitorTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled, self.sessionActive {
+                let otherAudioPlaying = AVAudioSession.sharedInstance().secondaryAudioShouldBeSilencedHint
+                if otherAudioPlaying, !self.wasOtherPrimaryAudioPlaying {
+                    self.onSystemAudioPlaybackStarted?()
+                    return
+                }
+                self.wasOtherPrimaryAudioPlaying = otherAudioPlaying
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+        }
+    }
+
     private func handleRouteChange(reasonRawValue: UInt?) {
         guard sessionActive, !isApplyingRebuild else { return }
         let reason = reasonRawValue.flatMap(AVAudioSession.RouteChangeReason.init(rawValue:))
@@ -380,16 +596,10 @@ final class AudioRecorder {
         }
         switch type {
         case .began:
-            if sink.isActivelyRecording {
-                onCaptureInterruptedByRouteChange?()
-                sink.cancelRecording()
-            }
-            isInputReady = false
-            isRecovering = true
-            onInputRecoveryStarted?()
-            if engine.isRunning {
-                engine.pause()
-            }
+            // Calls, Siri and media playback can all begin as an interruption.
+            // The product contract is to release the microphone immediately;
+            // do not leave a paused voice session waiting to resume underneath.
+            onSystemAudioPlaybackStarted?()
         case .ended:
             let options = AVAudioSession.InterruptionOptions(rawValue: optionsRawValue ?? 0)
             if options.contains(.shouldResume) {
@@ -401,6 +611,14 @@ final class AudioRecorder {
         @unknown default:
             scheduleRebuild(reason: "interruption-unknown")
         }
+    }
+
+    private func handleSilenceSecondaryAudioHint(hintRawValue: UInt?) {
+        guard sessionActive,
+              let hintRawValue,
+              AVAudioSession.SilenceSecondaryAudioHintType(rawValue: hintRawValue) == .begin
+        else { return }
+        onSystemAudioPlaybackStarted?()
     }
 #endif
 
@@ -699,6 +917,14 @@ enum AudioRouteRecoveryPolicy {
     static func canRetry(attempt: Int, maxAttempts: Int) -> Bool {
         attempt < maxAttempts
     }
+
+    /// Capped exponential backoff gives iOS time to finish a headset/HFP route
+    /// promotion instead of repeatedly reopening the same unavailable unit.
+    static func retryDelayNanoseconds(attempt: Int, baseDelayNanoseconds: UInt64) -> UInt64 {
+        // attempt 1 → 1x, 2 → 2x, 3 → 4x, 4+ → 8x (capped) of base settle.
+        let exponent = min(max(attempt - 1, 0), 3)
+        return baseDelayNanoseconds * UInt64(1 << exponent)
+    }
 }
 
 enum RecorderError: LocalizedError {
@@ -713,7 +939,7 @@ enum RecorderError: LocalizedError {
         case .invalidTargetFormat:
             return "无法创建录音格式"
         case .routeRecoveryFailed:
-            return "麦克风切换后恢复失败"
+            return "麦克风切换后暂不可用，请稍后再试"
         }
     }
 }

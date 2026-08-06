@@ -291,7 +291,7 @@ final class VoicePolishInputController: IMKInputController {
                 await MainActor.run {
                     StatusOverlayController.shared.show(msg, isError: true)
                 }
-            case .draft, .text:
+            case .text:
                 break
             }
         } catch {
@@ -327,7 +327,7 @@ final class VoicePolishInputController: IMKInputController {
                 await MainActor.run {
                     StatusOverlayController.shared.show(msg, isError: true)
                 }
-            case .draft, .text:
+            case .text:
                 break
             }
         } catch {
@@ -362,7 +362,7 @@ final class VoicePolishInputController: IMKInputController {
                 await MainActor.run {
                     StatusOverlayController.shared.show(msg, isError: true)
                 }
-            case .draft, .text:
+            case .text:
                 break
             }
         } catch {
@@ -390,7 +390,7 @@ final class VoicePolishInputController: IMKInputController {
                 }
             case .error, .unauthorized:
                 StatusOverlayController.shared.show(response.response.message ?? "无法追问", isError: true)
-            case .draft, .text:
+            case .text:
                 break
             }
         } catch {
@@ -447,7 +447,7 @@ final class VoicePolishInputController: IMKInputController {
                     await MainActor.run {
                         StatusOverlayController.shared.show(msg, isError: true)
                     }
-                case .draft, .text:
+                case .text:
                     break
                 }
             } catch {
@@ -469,11 +469,6 @@ final class VoicePolishInputController: IMKInputController {
                 switch response.response.outcome {
                 case .text:
                     let text = response.response.text ?? ""
-                    await deliver(text: text, boundSession: boundSession, client: clientAtStart)
-                case .draft:
-                    // Candidate review is an iOS keyboard feature. Keep macOS
-                    // compatible if an iOS-originated job is ever observed.
-                    let text = response.response.draft?.text ?? ""
                     await deliver(text: text, boundSession: boundSession, client: clientAtStart)
                 case .error, .unauthorized:
                     let msg = response.response.message ?? "识别失败"
@@ -540,6 +535,12 @@ final class VoicePolishInputController: IMKInputController {
                     return response.response.text
                 }
                 if response.response.outcome == .error {
+                    if response.response.errorCode == .discarded {
+                        if let status = response.response.status {
+                            applyPolishState(from: status)
+                        }
+                        return nil
+                    }
                     let message = response.response.message ?? "处理失败"
                     if let status = response.response.status {
                         applyPolishState(from: status)

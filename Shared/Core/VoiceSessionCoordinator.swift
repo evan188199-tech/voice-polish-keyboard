@@ -52,6 +52,10 @@ final class VoiceSessionCoordinator: ObservableObject {
     /// True while PCM is being pulled from the recorder after a release.
     /// New starts must wait so we never false-OK a second hold against the previous capture.
     private var isFinalizingCapture = false
+#if os(iOS)
+    /// Auto-close session after no hold-to-talk activity.
+    private var idleTimeoutTask: Task<Void, Never>?
+#endif
 
     // MARK: - Async multi-segment job pipeline
     private var jobs: [UUID: VoiceJob] = [:]
@@ -89,7 +93,6 @@ final class VoiceSessionCoordinator: ObservableObject {
         let apiKey: String
         let chineseScript: ChineseScriptPreference
         let compareWithSystemDictation: Bool
-        let voiceCandidateReviewEnabled: Bool
         /// Prior ask turns when this job is an armed follow-up.
         let askHistory: [AskConversationTurn]
     }
@@ -106,7 +109,6 @@ final class VoiceSessionCoordinator: ObservableObject {
         var polishedText: String?
         var finalText: String?
         var polishFailed = false
-        var draft: VoiceDraft?
         var errorMessage: String?
         var primaryLatencyMs: Int?
         var delivered = false
@@ -286,16 +288,22 @@ final class VoiceSessionCoordinator: ObservableObject {
             await bridgeServer?.start()
             state = .ready
             statusMessage = readyMessage()
+            noteSessionActivity(reason: "activate")
         } catch {
             state = .error
-            statusMessage = "启动失败: \(error.localizedDescription)"
-            lastErrorCode = .unknown
+            if error is RecorderError || Self.isAudioRouteError(error) {
+                statusMessage = "启动失败: \(Self.friendlyMicrophoneMessage(for: error))"
+                lastErrorCode = .inputSessionInvalid
+            } else {
+                statusMessage = "启动失败: \(error.localizedDescription)"
+                lastErrorCode = .unknown
+            }
             currentInputName = nil
             isInputReady = false
         }
     }
 
-    func deactivate() {
+    func deactivate(statusMessage overrideMessage: String? = nil) {
         // Invalidate any in-flight capture so late callbacks cannot reopen the mic.
         captureEpoch &+= 1
         pipelineGeneration &+= 1
@@ -304,6 +312,9 @@ final class VoiceSessionCoordinator: ObservableObject {
         comparePipelineTask?.cancel()
         audioTask = nil
         comparePipelineTask = nil
+#if os(iOS)
+        cancelIdleTimeout()
+#endif
         clearAllJobs()
 
         let server = bridgeServer
@@ -327,7 +338,7 @@ final class VoiceSessionCoordinator: ObservableObject {
         currentInputName = nil
         isInputReady = false
         clearRecorderRouteCallbacks()
-        statusMessage = "已关闭 · 麦克风与桥接已停止"
+        statusMessage = overrideMessage ?? "已关闭 · 麦克风与桥接已停止"
     }
 
     func downloadModel() async throws {
@@ -416,6 +427,9 @@ final class VoiceSessionCoordinator: ObservableObject {
         }
         guard state != .recording else { return true }
 
+        // Latest segment wins: drop every older uninserted job immediately.
+        discardUninsertedPipeline()
+
         captureEpoch &+= 1
         let epoch = captureEpoch
         state = .recording
@@ -423,6 +437,7 @@ final class VoiceSessionCoordinator: ObservableObject {
         inputLevel = 0
         statusMessage = "录音中 · 松开发送"
         lastErrorCode = nil
+        noteSessionActivity(reason: "startRecording")
         recorder.beginRecording()
 
         let maxDur = settings?.maxRecordingDuration ?? AppConstants.defaultMaxRecordingDuration
@@ -486,6 +501,7 @@ final class VoiceSessionCoordinator: ObservableObject {
         isFinalizingCapture = false
         refreshProcessingStatus()
         kickASRWorker()
+        noteSessionActivity(reason: "finishRecording")
         return jobID
     }
 
@@ -506,13 +522,9 @@ final class VoiceSessionCoordinator: ObservableObject {
             }
             if let outcome = takeJobOutcome(jobID: jobID) {
                 switch outcome {
-                case .draft:
-                    // This compatibility helper has no review UI.  Leave the
-                    // job pending until an interactive keyboard confirms it.
-                    return nil
                 case .text(let text):
                     return text
-                case .failed:
+                case .failed, .discarded:
                     return nil
                 case .pending:
                     break
@@ -539,6 +551,7 @@ final class VoiceSessionCoordinator: ObservableObject {
         elapsedSeconds = nil
         inputLevel = 0
         refreshProcessingStatus(defaultMessage: "已取消 · 按住说话")
+        noteSessionActivity(reason: "cancelRecording")
     }
 
     /// Cancel only the live capture after a microphone route change.
@@ -572,9 +585,9 @@ final class VoiceSessionCoordinator: ObservableObject {
 
     enum JobOutcome: Equatable {
         case pending
-        case draft(VoiceDraft)
         case text(String)
         case failed(String)
+        case discarded
     }
 
     /// Consume a deliverable job result. `jobID == nil` returns the oldest deliverable job.
@@ -590,9 +603,6 @@ final class VoiceSessionCoordinator: ObservableObject {
             }
             guard deliveryCursor.canDeliver(sequence: job.sequence) else {
                 return .pending
-            }
-            if job.phase == .awaitingReview, let draft = job.draft {
-                return .draft(draft)
             }
             return consumeIfTerminal(job)
         }
@@ -632,9 +642,9 @@ final class VoiceSessionCoordinator: ObservableObject {
                     reportedState = .transcribing
                 case .queuedPolish, .polishing:
                     reportedState = .polishing
-                case .awaitingReview, .ready:
+                case .ready:
                     reportedState = .ready
-                case .failed:
+                case .discarded, .failed:
                     reportedState = .error
                 }
             }
@@ -670,6 +680,9 @@ final class VoiceSessionCoordinator: ObservableObject {
             let message = job.errorMessage ?? "识别失败"
             markDelivered(job)
             return .failed(message)
+        case .discarded:
+            markDelivered(job)
+            return .discarded
         default:
             return .pending
         }
@@ -732,6 +745,32 @@ final class VoiceSessionCoordinator: ObservableObject {
         updatePendingCount()
     }
 
+    /// Invalidate the in-flight pipeline so a new capture cannot be blocked by
+    /// older ASR/polish work or by an unpolled ready result.
+    private func discardUninsertedPipeline() {
+        let hasWork = !jobs.isEmpty || !retainedOutcomes.isEmpty || !asrQueue.isEmpty || !polishQueue.isEmpty
+        guard hasWork else { return }
+
+        pipelineGeneration &+= 1
+        comparePipelineTask?.cancel()
+        comparePipelineTask = nil
+
+        var staleIDs = Set(jobs.keys)
+        staleIDs.formUnion(retainedOutcomes.keys)
+        for id in staleIDs {
+            retainedOutcomes[id] = .discarded
+        }
+
+        jobs.removeAll()
+        jobOrder.removeAll()
+        asrQueue.removeAll()
+        polishQueue.removeAll()
+        polishInFlight = 0
+        nextSequence = 1
+        deliveryCursor.reset(to: 1)
+        updatePendingCount()
+    }
+
     private func updatePendingCount() {
         pendingCount = jobs.values.filter { !$0.delivered }.count
     }
@@ -767,51 +806,8 @@ final class VoiceSessionCoordinator: ObservableObject {
             apiKey: settings.apiKey ?? "",
             chineseScript: settings.chineseScript,
             compareWithSystemDictation: settings.compareWithSystemDictation,
-            voiceCandidateReviewEnabled: settings.voiceCandidateReviewEnabled,
             askHistory: history
         )
-    }
-
-    /// Accept a keyboard-reviewed draft and continue optional cloud polishing.
-    /// A duplicate confirmation is successful once the job has already moved on.
-    @discardableResult
-    func confirmDraft(jobID: UUID, text: String) -> Bool {
-        guard let job = jobs[jobID], job.generation == pipelineGeneration else { return false }
-        guard job.phase == .awaitingReview else {
-            return job.phase == .queuedPolish || job.phase == .polishing || job.phase == .ready
-        }
-        let revised = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !revised.isEmpty else {
-            failJob(job, message: "候选词确认内容为空")
-            return false
-        }
-        job.localText = revised
-        job.draft = nil
-        let shouldPolish = job.snapshot.polishEnabled && !job.snapshot.apiKey.isEmpty
-        if shouldPolish {
-            job.phase = .queuedPolish
-            polishQueue.append(jobID)
-            refreshProcessingStatus()
-            pumpPolishQueue()
-        } else {
-            completeJob(job, finalText: revised, polished: nil, polishFailed: false)
-        }
-        return true
-    }
-
-    /// The keyboard lost its host text session. Keep the raw marked text and
-    /// release the delivery cursor; never let a late polish overwrite a new
-    /// cursor or document.
-    @discardableResult
-    func abandonDraft(jobID: UUID) -> Bool {
-        guard let job = jobs[jobID], job.phase == .awaitingReview else { return false }
-        let raw = job.draft?.text ?? job.localText ?? ""
-        guard !raw.isEmpty else { return false }
-        job.draft = nil
-        job.localText = raw
-        completeJob(job, finalText: raw, polished: nil, polishFailed: false)
-        _ = takeJobOutcome(jobID: jobID)
-        return true
     }
 
     private func clearCompareFields() {
@@ -841,7 +837,7 @@ final class VoiceSessionCoordinator: ObservableObject {
 
         if let job = active.first(where: {
             switch $0.phase {
-            case .queuedASR, .transcribing, .queuedPolish, .polishing, .awaitingReview:
+            case .queuedASR, .transcribing, .queuedPolish, .polishing:
                 return true
             default:
                 return false
@@ -852,8 +848,6 @@ final class VoiceSessionCoordinator: ObservableObject {
                 state = .transcribing
             case .queuedPolish, .polishing:
                 state = .polishing
-            case .awaitingReview:
-                state = .ready
             default:
                 break
             }
@@ -865,7 +859,7 @@ final class VoiceSessionCoordinator: ObservableObject {
             return
         }
 
-        if let ready = active.first(where: { $0.phase == .ready || $0.phase == .awaitingReview }) {
+        if let ready = active.first(where: { $0.phase == .ready }) {
             state = .ready
             statusMessage = VoiceJobStatusText.processingMessage(
                 phase: ready.phase,
@@ -885,7 +879,79 @@ final class VoiceSessionCoordinator: ObservableObject {
         }
     }
 
+
+    // MARK: - Idle auto-close (iOS)
+
+    /// Reset the idle timer. Hold-to-talk and session activate count as activity.
+    private func noteSessionActivity(reason: String) {
+#if os(iOS)
+        _ = reason
+        scheduleIdleTimeoutIfNeeded()
+#endif
+    }
+
+#if os(iOS)
+    private func cancelIdleTimeout() {
+        idleTimeoutTask?.cancel()
+        idleTimeoutTask = nil
+    }
+
+    private func scheduleIdleTimeoutIfNeeded() {
+        cancelIdleTimeout()
+        guard let settings, settings.sessionIdleTimeoutEnabled else { return }
+        guard state != .inactive else { return }
+        // Do not fire while the user is holding to talk.
+        if state == .recording { return }
+
+        let timeout = min(
+            max(settings.sessionIdleTimeoutSeconds, AppConstants.minimumSessionIdleTimeoutSeconds),
+            AppConstants.absoluteMaxSessionIdleTimeoutSeconds
+        )
+        let generation = pipelineGeneration
+        idleTimeoutTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let ns = UInt64(timeout * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: ns)
+            guard !Task.isCancelled else { return }
+            guard self.pipelineGeneration == generation else { return }
+            guard self.state != .inactive else { return }
+            if self.state == .recording {
+                // User started talking during the wait edge; reschedule.
+                self.scheduleIdleTimeoutIfNeeded()
+                return
+            }
+            self.deactivate(statusMessage: "空闲超时，会话已自动关闭")
+        }
+    }
+#endif
+
+    private static func isAudioRouteError(_ error: Error) -> Bool {
+        if error is RecorderError { return true }
+        let nsError = error as NSError
+        let raw = nsError.localizedDescription
+        return nsError.domain.localizedCaseInsensitiveContains("avfaudio")
+            || nsError.domain.localizedCaseInsensitiveContains("coreaudio")
+            || nsError.code == -10868
+            || nsError.code == 10868
+            || raw.contains("10868")
+    }
+
+    private static func friendlyMicrophoneMessage(for error: Error) -> String {
+        if let recorderError = error as? RecorderError {
+            return recorderError.localizedDescription
+        }
+        if isAudioRouteError(error) {
+            return "麦克风路由切换中，请稍后再试"
+        }
+        let raw = (error as NSError).localizedDescription
+        if raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "麦克风暂不可用，请稍后再试"
+        }
+        return raw
+    }
+
     private func readyMessage() -> String {
+
         if let name = currentInputName, !name.isEmpty {
             return "就绪 · \(name) · 按住说话"
         }
@@ -893,6 +959,12 @@ final class VoiceSessionCoordinator: ObservableObject {
     }
 
     private func bindRecorderRouteCallbacks() {
+#if os(iOS)
+        recorder.onSystemAudioPlaybackStarted = { [weak self] in
+            guard let self, self.state != .inactive else { return }
+            self.deactivate(statusMessage: "系统正在播放音频，语音会话已自动关闭")
+        }
+#endif
         recorder.onCaptureInterruptedByRouteChange = { [weak self] in
             self?.cancelRecordingForRouteChange()
         }
@@ -933,15 +1005,18 @@ final class VoiceSessionCoordinator: ObservableObject {
             guard let self else { return }
             self.isInputReady = false
             self.lastErrorCode = .inputSessionInvalid
-            // Stay usable for later route events; surface a diagnostic message.
+            // Stay usable for later route events; surface a short recovery hint.
             if self.state != .inactive && self.state != .recording {
                 self.state = .error
-                self.statusMessage = "麦克风不可用: \(error.localizedDescription)"
+                self.statusMessage = Self.friendlyMicrophoneMessage(for: error)
             }
         }
     }
 
     private func clearRecorderRouteCallbacks() {
+#if os(iOS)
+        recorder.onSystemAudioPlaybackStarted = nil
+#endif
         recorder.onCaptureInterruptedByRouteChange = nil
         recorder.onInputNameChange = nil
         recorder.onInputRecoveryStarted = nil
@@ -981,9 +1056,6 @@ final class VoiceSessionCoordinator: ObservableObject {
         }
 
         maybeLaunchCompare(for: job)
-        #if os(iOS)
-        let candidateTask = makeCandidateTask(for: job)
-        #endif
 
         do {
             let started = ContinuousClock.now
@@ -992,38 +1064,12 @@ final class VoiceSessionCoordinator: ObservableObject {
             job.primaryLatencyMs = elapsedMilliseconds(since: started)
             lastPrimaryLatencyMs = job.primaryLatencyMs
 
-            let cleaned = LocalTextProcessor.process(raw, vocabulary: job.snapshot.vocabulary)
-            let local = applyScript(cleaned, job.snapshot.chineseScript)
+            // SenseVoice already ran LocalTextProcessor per VAD segment.
+            // Do not re-process the joined transcript here, or single-letter
+            // segments separated by a pause would collapse across that boundary.
+            let local = applyScript(raw, job.snapshot.chineseScript)
             job.localText = local
             lastTranscription = local
-
-            #if os(iOS)
-            if let candidateTask,
-               let apple = await awaitCandidateResult(from: candidateTask),
-               let generatedDraft = VoiceCandidateBuilder.makeDraft(
-                    source: local,
-                    hypotheses: apple.hypotheses.map {
-                        AppleSpeechHypothesis(
-                            text: applyScript(
-                                LocalTextProcessor.process($0.text, vocabulary: job.snapshot.vocabulary),
-                                job.snapshot.chineseScript
-                            ),
-                            confidence: $0.confidence,
-                            rank: $0.rank
-                        )
-                    }
-               ) {
-                let draft = VoiceDraft(
-                    id: job.id,
-                    text: generatedDraft.text,
-                    candidateGroups: generatedDraft.candidateGroups
-                )
-                job.draft = draft
-                job.phase = .awaitingReview
-                refreshProcessingStatus()
-                return
-            }
-            #endif
 
             let shouldPolish = job.snapshot.polishEnabled && !job.snapshot.apiKey.isEmpty
             if shouldPolish {
@@ -1042,39 +1088,6 @@ final class VoiceSessionCoordinator: ObservableObject {
             failJob(job, message: error.localizedDescription)
         }
     }
-
-    #if os(iOS)
-    private func makeCandidateTask(for job: VoiceJob) -> Task<AppleSpeechCandidates?, Never>? {
-        guard job.snapshot.voiceCandidateReviewEnabled else { return nil }
-        let apple = appleTranscriber ?? AppleOnDeviceTranscriber()
-        if appleTranscriber == nil { appleTranscriber = apple }
-        let data = job.pcmData
-        return Task {
-            do {
-                return try await apple.transcribeCandidates(data, vocabulary: "")
-            } catch {
-                return nil
-            }
-        }
-    }
-
-    private func awaitCandidateResult(
-        from task: Task<AppleSpeechCandidates?, Never>
-    ) async -> AppleSpeechCandidates? {
-        await withTaskGroup(of: AppleSpeechCandidates?.self) { group in
-            group.addTask { await task.value }
-            group.addTask {
-                try? await Task.sleep(
-                    nanoseconds: UInt64(AppConstants.candidateRecognitionGracePeriod * 1_000_000_000)
-                )
-                return nil
-            }
-            let value = await group.next() ?? nil
-            group.cancelAll()
-            return value
-        }
-    }
-    #endif
 
     private func maybeLaunchCompare(for job: VoiceJob) {
 #if os(iOS)
@@ -1149,9 +1162,14 @@ final class VoiceSessionCoordinator: ObservableObject {
         do {
             let polished = try await polishWithTimeout(local, settings: polishing)
             guard job.generation == pipelineGeneration, jobs[jobID] != nil else { return }
-            // LLM success (纠错/代码/润色/问答): keep model text. Do not re-run
-            // LocalTextProcessor.joinTranscriptSegments or force local `。` here.
-            let finalText = applyScript(polished, job.snapshot.chineseScript)
+            // Keep the model's content, then apply lightweight local casing and
+            // vocabulary normalization so polished output also respects entries
+            // such as "EUPB" / "iPhone Air".
+            let normalized = LocalTextProcessor.process(
+                polished,
+                vocabulary: job.snapshot.vocabulary
+            )
+            let finalText = applyScript(normalized, job.snapshot.chineseScript)
             if job.snapshot.polishMode == .askLLM {
                 appendAskTurn(user: local, assistant: finalText)
             }

@@ -6,8 +6,7 @@ struct KeyboardView: View {
     let onInsert: (String) -> Void
     let onDelete: () -> Void
     let onReturn: () -> Void
-    let onSetMarkedText: (String) -> Void
-    let onUnmarkText: () -> Void
+    let onActivateSession: () -> Void
 
     @State private var page: KeyboardPage = .voice
     @State private var dragX: CGFloat = 0
@@ -36,10 +35,7 @@ struct KeyboardView: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            if model.activeDraft != nil {
-                statusBar
-                candidateReviewArea
-            } else if page == .voice {
+            if page == .voice {
                 statusBar
                 micArea
             } else {
@@ -56,11 +52,6 @@ struct KeyboardView: View {
             // Keep the user on the voice page while a hold-to-record gesture is active.
             if isRecording {
                 page = .voice
-            }
-        }
-        .onChange(of: model.activeDraft) { _, draft in
-            if let draft {
-                onSetMarkedText(draft.text)
             }
         }
     }
@@ -104,9 +95,14 @@ struct KeyboardView: View {
             .opacity((!model.isConnected || model.isRecording) ? 0.45 : 1)
             .accessibilityLabel("中文脚本：\(model.chineseScript.shortLabel)")
             if !model.isConnected {
-                Text("未连接")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                Button {
+                    onActivateSession()
+                } label: {
+                    Label("启动会话", systemImage: "mic.badge.plus")
+                }
+                .font(.caption.weight(.semibold))
+                .buttonStyle(.borderedProminent)
+                .controlSize(.mini)
             }
             if model.canRetry {
                 Button("重试") {
@@ -194,96 +190,6 @@ struct KeyboardView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.vertical, 4)
-    }
-
-    // MARK: - Candidate review
-
-    private var candidateReviewArea: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if let draft = model.activeDraft {
-                Text(draft.text)
-                    .font(.subheadline)
-                    .lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color.blue.opacity(0.08))
-                    )
-
-                ForEach(draft.candidateGroups) { group in
-                    candidateRow(group, draft: draft)
-                }
-
-                HStack {
-                    Text("可疑词")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button("完成") {
-                        finishDraftReview()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .padding(.vertical, 4)
-    }
-
-    private func candidateRow(_ group: CandidateGroup, draft: VoiceDraft) -> some View {
-        let original = group.original.isEmpty
-            ? (draftSubstring(group.range, from: draft.text) ?? "")
-            : group.original
-        return VStack(alignment: .leading, spacing: 4) {
-            Text(original)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.blue)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    candidateChip("保留", selected: false) {
-                        model.selectCandidate(groupID: group.id, replacement: original)
-                    }
-                    ForEach(group.alternatives, id: \.self) { alternative in
-                        candidateChip(alternative, selected: alternative == original) {
-                            model.selectCandidate(groupID: group.id, replacement: alternative)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private func candidateChip(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.caption)
-                .lineLimit(1)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
-                .background(
-                    Capsule().fill(selected ? Color.blue.opacity(0.2) : Color.secondary.opacity(0.12))
-                )
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func draftSubstring(_ range: UTF16TextRange, from text: String) -> String? {
-        let count = text.utf16.count
-        guard range.location <= count, range.length <= count - range.location else { return nil }
-        let start = String.Index(utf16Offset: range.location, in: text)
-        let end = String.Index(utf16Offset: range.location + range.length, in: text)
-        return String(text[start..<end])
-    }
-
-    private func finishDraftReview() {
-        Task {
-            if let text = await model.confirmActiveDraft() {
-                onSetMarkedText(text)
-                onUnmarkText()
-            }
-        }
     }
 
     private var micGesture: some Gesture {
@@ -446,10 +352,6 @@ struct KeyboardView: View {
         let canSwitch = !model.isRecording
         return Button {
             guard canSwitch else { return }
-            guard model.activeDraft == nil else {
-                finishDraftReview()
-                return
-            }
             withAnimation(.easeInOut(duration: 0.18)) {
                 page = page == .voice ? .numbers : .voice
             }
@@ -515,16 +417,7 @@ struct KeyboardView: View {
     }
 
     private func requestAction(_ action: @escaping () -> Void) {
-        guard model.activeDraft != nil else {
-            action()
-            return
-        }
-        Task {
-            guard let text = await model.confirmActiveDraft() else { return }
-            onSetMarkedText(text)
-            onUnmarkText()
-            action()
-        }
+        action()
     }
 
     // MARK: - Helpers

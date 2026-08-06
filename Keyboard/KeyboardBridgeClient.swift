@@ -17,16 +17,14 @@ actor KeyboardBridgeClient {
         polishEnabled: Bool? = nil,
         polishMode: String? = nil,
         chineseScript: String? = nil,
-        jobID: UUID? = nil,
-        draftText: String? = nil
+        jobID: UUID? = nil
     ) async throws -> WireResponse {
         try await client.send(
             command,
             polishEnabled: polishEnabled,
             polishMode: polishMode,
             chineseScript: chineseScript,
-            jobID: jobID,
-            draftText: draftText
+            jobID: jobID
         )
     }
 }

@@ -1,7 +1,8 @@
 import Foundation
 
-/// Runs before the optional API polisher: filler cleanup, punctuation spacing,
-/// VAD segment joining, and English casing normalization for all-caps ASR artifacts.
+/// Runs before the optional API polisher: filler cleanup, Chinese number
+/// normalization, spoken-letter collapsing, punctuation spacing, VAD segment
+/// joining, and English casing normalization for all-caps ASR artifacts.
 /// Cloud polish (纠错/代码/润色/问答) success paths keep the LLM text as-is; this
 /// processor only shapes local ASR text that may also be fed into polish.
 enum LocalTextProcessor {
@@ -17,7 +18,7 @@ enum LocalTextProcessor {
     /// Keys are always lowercased; values are the preferred display form.
     private static let builtInPreferredCasing: [String: String] = {
         let terms = [
-            "iPhone", "iPad", "iPod", "iMac", "iOS", "iPadOS", "macOS", "tvOS", "watchOS",
+            "iPhone", "iPhone Air", "iPad", "iPod", "iMac", "iOS", "iPadOS", "macOS", "tvOS", "watchOS",
             "iCloud", "iMessage", "iTunes", "MacBook", "FaceTime", "AirPods", "AirPlay",
             "AirTag", "HomePod", "TestFlight", "App Store", "Mac App Store",
             "ChatGPT", "OpenAI", "GitHub", "GitLab", "YouTube", "Wi-Fi", "WiFi",
@@ -72,8 +73,27 @@ enum LocalTextProcessor {
         t = collapseSpacesBetweenCJK(t)
         t = t.trimmingCharacters(in: .whitespacesAndNewlines)
 
+        // Spoken Chinese integers / digit runs -> Arabic numerals.
+        // Keep isolated single numeral characters so prose like "一心一意" is safe.
+        t = normalizeChineseNumbers(t)
+
+        // Let a vocabulary entry match a spelled-out name too ("E U P B"
+        // should be looked up as "EUPB", not as four separate tokens).
+        t = collapseSpelledOutLetters(t, matchingVocabulary: vocabulary)
         t = normalizeEnglishCasing(t, vocabulary: vocabulary)
+        // ASR often separates spoken English letters with spaces ("A B C").
+        // Rejoin those sequences after casing normalization so the result is
+        // an acronym instead of three unrelated words.
+        t = collapseSpelledOutLetters(t)
         return t
+    }
+
+    /// Process each VAD / ASR segment on its own, then smart-join.
+    /// Letter collapsing therefore respects pause boundaries: same-segment
+    /// "A B C" becomes "ABC", while "A B" + pause + "C D" stays "AB CD".
+    static func processSegments(_ segments: [String], vocabulary: String) -> String {
+        let processed = segments.map { process($0, vocabulary: vocabulary) }
+        return joinTranscriptSegments(processed)
     }
 
     /// Join VAD / multi-chunk ASR segments for a single hold.
@@ -194,6 +214,166 @@ enum LocalTextProcessor {
         if ch.isNumber { return true }
         if ch == "'" || ch == "-" { return true }
         return false
+    }
+
+    // MARK: - Chinese number normalization
+
+    /// Digits used in pure digit-by-digit runs (phone numbers, codes).
+    /// `两/兩` are intentionally excluded here and only accepted with units.
+    private static let pureChineseDigits: [Character: Int] = [
+        "零": 0, "〇": 0, "○": 0,
+        "一": 1, "壹": 1,
+        "二": 2, "贰": 2,
+        "三": 3, "叁": 3,
+        "四": 4, "肆": 4,
+        "五": 5, "伍": 5,
+        "六": 6, "陆": 6, "陸": 6,
+        "七": 7, "柒": 7,
+        "八": 8, "捌": 8,
+        "九": 9, "玖": 9
+    ]
+
+    private static let unitChineseDigits: [Character: Int] = [
+        "两": 2, "兩": 2
+    ]
+
+    private static let chineseNumberUnits: [Character: Int] = [
+        "十": 10, "拾": 10,
+        "百": 100, "佰": 100,
+        "千": 1000, "仟": 1000,
+        "万": 10_000, "萬": 10_000,
+        "亿": 100_000_000, "億": 100_000_000
+    ]
+
+    /// Convert contiguous spoken Chinese number spans into Arabic numerals.
+    private static func normalizeChineseNumbers(_ text: String) -> String {
+        guard !text.isEmpty else { return text }
+        var output = ""
+        var run = ""
+
+        func flushRun() {
+            guard !run.isEmpty else { return }
+            if let converted = convertChineseNumberRun(run) {
+                output += converted
+            } else {
+                output += run
+            }
+            run = ""
+        }
+
+        for ch in text {
+            if isChineseNumberChar(ch) {
+                run.append(ch)
+            } else {
+                flushRun()
+                output.append(ch)
+            }
+        }
+        flushRun()
+        return output
+    }
+
+    private static func isChineseNumberChar(_ ch: Character) -> Bool {
+        pureChineseDigits[ch] != nil
+            || unitChineseDigits[ch] != nil
+            || chineseNumberUnits[ch] != nil
+    }
+
+    private static func convertChineseNumberRun(_ run: String) -> String? {
+        let chars = Array(run)
+        guard !chars.isEmpty else { return nil }
+
+        // Digit-by-digit speech: 一二三四 / 八零八零.
+        if chars.allSatisfy({ pureChineseDigits[$0] != nil }) {
+            guard chars.count >= 2 else { return nil }
+            return chars.map { String(pureChineseDigits[$0]!) }.joined()
+        }
+
+        // Unit-based integers: 十一 / 一百二十三 / 一万零三 / 兩百.
+        // Reject pure `两/兩` and any span that never uses a unit.
+        guard chars.contains(where: { chineseNumberUnits[$0] != nil }) else {
+            return nil
+        }
+        guard let value = parseChineseIntegerWithUnits(chars) else { return nil }
+        return String(value)
+    }
+
+    /// Parse a Chinese integer that contains at least one unit (十/百/千/万/亿...).
+    private static func parseChineseIntegerWithUnits(_ chars: [Character]) -> Int? {
+        var result = 0
+        var section = 0
+        var number = 0
+        var sawUnit = false
+
+        for ch in chars {
+            if let digit = pureChineseDigits[ch] ?? unitChineseDigits[ch] {
+                // `零` is only a placeholder between units (一万零三); clear any
+                // pending coefficient so it does not become a trailing value.
+                number = digit
+                continue
+            }
+
+            guard let unit = chineseNumberUnits[ch] else { return nil }
+            sawUnit = true
+
+            if unit == 10_000 || unit == 100_000_000 {
+                section += number
+                // Bare `万` / `亿` is uncommon in ASR; require a coefficient or
+                // prior section value so we do not invent numbers from noise.
+                if section == 0 { return nil }
+                result += section * unit
+                section = 0
+                number = 0
+            } else {
+                // 十/百/千: leading unit implies coefficient 1 (`十二`).
+                let coefficient = number == 0 ? 1 : number
+                section += coefficient * unit
+                number = 0
+            }
+        }
+
+        guard sawUnit else { return nil }
+        result += section + number
+        // Reject degenerate parses while still allowing genuine zero-only noise
+        // to fall through unused.
+        guard result > 0 else { return nil }
+        return result
+    }
+
+    /// Rejoin a run of individually spoken Latin letters, such as "A B C".
+    /// Only two or more adjacent one-letter tokens are changed, so regular
+    /// English such as "I am" remains untouched.
+    private static func collapseSpelledOutLetters(
+        _ text: String,
+        matchingVocabulary vocabulary: String? = nil
+    ) -> String {
+        guard let regex = try? NSRegularExpression(
+            pattern: #"(?<![A-Za-z])[A-Za-z](?:[ \t]+[A-Za-z])+(?![A-Za-z])"#,
+            options: []
+        ) else {
+            return text
+        }
+
+        let range = NSRange(text.startIndex..., in: text)
+        var result = ""
+        var cursor = text.startIndex
+        regex.enumerateMatches(in: text, options: [], range: range) { match, _, _ in
+            guard let match, let matchRange = Range(match.range, in: text) else { return }
+            result.append(contentsOf: text[cursor..<matchRange.lowerBound])
+            let collapsed = text[matchRange].filter { $0.isASCII && $0.isLetter }.uppercased()
+            if let vocabulary, vocabularyLookup(from: vocabulary)[collapsed.lowercased()] != nil {
+                result += collapsed
+            } else if vocabulary != nil {
+                // Leave unmatched sequences for the normal post-normalization
+                // pass, which handles generic spoken letter runs.
+                result.append(contentsOf: text[matchRange])
+            } else {
+                result += collapsed
+            }
+            cursor = matchRange.upperBound
+        }
+        result.append(contentsOf: text[cursor...])
+        return result
     }
 
     private static let boundaryPunctuation: Set<Character> = [

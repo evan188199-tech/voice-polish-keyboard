@@ -91,4 +91,27 @@ final class SharedProtocolMacTests: XCTestCase {
             "hello world open the app"
         )
     }
+
+    func testLocalTextProcessorConvertsChineseNumbers() {
+        XCTAssertEqual(LocalTextProcessor.process("一二三四", vocabulary: ""), "1234")
+        XCTAssertEqual(LocalTextProcessor.process("八零八零", vocabulary: ""), "8080")
+        XCTAssertEqual(LocalTextProcessor.process("一百二十三", vocabulary: ""), "123")
+        XCTAssertEqual(LocalTextProcessor.process("一万零三", vocabulary: ""), "10003")
+        XCTAssertEqual(LocalTextProcessor.process("一心一意", vocabulary: ""), "一心一意")
+    }
+
+    func testLocalTextProcessorProcessSegmentsRespectsLetterPauses() {
+        XCTAssertEqual(
+            LocalTextProcessor.processSegments(["C O D E X"], vocabulary: ""),
+            "CODEX"
+        )
+        XCTAssertEqual(
+            LocalTextProcessor.processSegments(["A B", "C D"], vocabulary: ""),
+            "AB CD"
+        )
+        XCTAssertEqual(
+            LocalTextProcessor.processSegments(["hello world"], vocabulary: ""),
+            "Hello world"
+        )
+    }
 }

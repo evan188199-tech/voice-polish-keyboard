@@ -29,9 +29,6 @@ final class KeyboardViewModel: ObservableObject {
     @Published var askFollowUpAvailable = false
     /// Next ask capture will include conversation history.
     @Published var askFollowUpArmed = false
-    /// A not-yet-committed transcription shown to the host as marked text.
-    @Published private(set) var activeDraft: VoiceDraft?
-
     private let client = KeyboardBridgeClient()
     private var timer: Timer?
     private var recordingStart: Date?
@@ -126,16 +123,19 @@ final class KeyboardViewModel: ObservableObject {
 
         do {
             var response = try await client.send(.start)
-            // Retry transient busy while previous segment is still submitting PCM.
-            for _ in 0..<5 {
+            // Retry transient busy while previous segment is still submitting PCM,
+            // and briefly wait out microphone route recovery after headset changes.
+            for attempt in 0..<12 {
                 if response.response.outcome == .ok { break }
                 if response.response.outcome == .unauthorized { break }
                 let code = response.response.errorCode
                 if code == .companionNotRunning || code == .micDenied || code == .modelNotReady {
                     break
                 }
-                try? await Task.sleep(nanoseconds: 40_000_000)
+                let delay: UInt64 = (code == .inputSessionInvalid) ? 120_000_000 : 40_000_000
+                try? await Task.sleep(nanoseconds: delay)
                 response = try await client.send(.start)
+                _ = attempt
             }
 
             switch response.response.outcome {
@@ -156,7 +156,7 @@ final class KeyboardViewModel: ObservableObject {
                     currentState = .error
                 }
                 canRetry = true
-            case .draft, .text:
+            case .text:
                 break
             }
         } catch {
@@ -190,7 +190,7 @@ final class KeyboardViewModel: ObservableObject {
         do {
             let response = try await client.send(.finish)
             switch response.response.outcome {
-            case .draft, .text:
+            case .text:
                 // Legacy servers may still return text on finish.
                 currentState = .ready
                 statusText = readyPrompt
@@ -247,53 +247,6 @@ final class KeyboardViewModel: ObservableObject {
         }
     }
 
-    /// Replace one candidate span and shift following UTF-16 ranges. Invalid
-    /// host or bridge data is ignored rather than risking a malformed edit.
-    func selectCandidate(groupID: UUID, replacement: String) {
-        guard var draft = activeDraft,
-              let index = draft.candidateGroups.firstIndex(where: { $0.id == groupID }),
-              let range = stringRange(draft.candidateGroups[index].range, in: draft.text) else { return }
-        let oldLength = draft.candidateGroups[index].range.length
-        draft.text.replaceSubrange(range, with: replacement)
-        let delta = replacement.utf16.count - oldLength
-        draft.candidateGroups[index].range.length = replacement.utf16.count
-        for offset in draft.candidateGroups.indices where offset != index {
-            if draft.candidateGroups[offset].range.location > draft.candidateGroups[index].range.location {
-                draft.candidateGroups[offset].range.location += delta
-            }
-        }
-        activeDraft = draft
-    }
-
-    /// Confirm the displayed draft and wait for its ordered final result.
-    func confirmActiveDraft() async -> String? {
-        guard let draft = activeDraft else { return nil }
-        do {
-            let response = try await client.send(.confirmDraft, jobID: draft.id, draftText: draft.text)
-            guard response.response.outcome == .ok else {
-                statusText = response.response.message ?? "候选词确认失败"
-                return nil
-            }
-            activeDraft = nil
-            currentState = .polishing
-            statusText = response.response.status?.message ?? "处理中…"
-            return await pollForResult(jobID: draft.id)
-        } catch {
-            statusText = "通信失败"
-            return nil
-        }
-    }
-
-    func discardActiveDraft() {
-        activeDraft = nil
-    }
-
-    func abandonActiveDraft() async {
-        guard let draft = activeDraft else { return }
-        _ = try? await client.send(.abandonDraft, jobID: draft.id)
-        activeDraft = nil
-    }
-
     /// Wait until a scheduled/running start attempt settles.
     /// Returns true only when the server-side recording actually started.
     private func waitForHoldStartToSettle() async -> Bool {
@@ -341,7 +294,7 @@ final class KeyboardViewModel: ObservableObject {
                 }
             case .error, .unauthorized:
                 statusText = response.response.message ?? "繁简切换失败"
-            case .draft, .text:
+            case .text:
                 break
             }
         } catch {
@@ -386,7 +339,7 @@ final class KeyboardViewModel: ObservableObject {
                 }
             case .error, .unauthorized:
                 statusText = response.response.message ?? "模式切换失败"
-            case .draft, .text:
+            case .text:
                 break
             }
         } catch {
@@ -422,7 +375,7 @@ final class KeyboardViewModel: ObservableObject {
                 }
             case .error, .unauthorized:
                 statusText = response.response.message ?? "润色开关失败"
-            case .draft, .text:
+            case .text:
                 break
             }
         } catch {
@@ -452,7 +405,7 @@ final class KeyboardViewModel: ObservableObject {
                 }
             case .error, .unauthorized:
                 statusText = response.response.message ?? "模式切换失败"
-            case .draft, .text:
+            case .text:
                 break
             }
         } catch {
@@ -541,14 +494,6 @@ final class KeyboardViewModel: ObservableObject {
         }
     }
 
-    private func stringRange(_ range: UTF16TextRange, in text: String) -> Range<String.Index>? {
-        let count = text.utf16.count
-        guard range.location <= count, range.length <= count - range.location else { return nil }
-        let start = String.Index(utf16Offset: range.location, in: text)
-        let end = String.Index(utf16Offset: range.location + range.length, in: text)
-        return start <= end ? start..<end : nil
-    }
-
     func armAskFollowUp() async {
         guard isConnected, !isRecording else { return }
         do {
@@ -565,7 +510,7 @@ final class KeyboardViewModel: ObservableObject {
                 statusText = response.response.message ?? readyPrompt
             case .error, .unauthorized:
                 statusText = response.response.message ?? "无法追问"
-            case .draft, .text:
+            case .text:
                 break
             }
         } catch {
@@ -598,13 +543,6 @@ final class KeyboardViewModel: ObservableObject {
             do {
                 let response = try await client.send(.status, jobID: jobID)
                 switch response.response.outcome {
-                case .draft:
-                    guard let draft = response.response.draft else { continue }
-                    activeDraft = draft
-                    currentState = .ready
-                    statusText = "点选候选词后完成"
-                    canRetry = false
-                    return nil
                 case .text:
                     // Do not clobber an in-progress second capture / later waiter UI.
                     if let status = response.response.status {
@@ -619,6 +557,15 @@ final class KeyboardViewModel: ObservableObject {
                     canRetry = false
                     return response.response.text
                 case .error:
+                    if response.response.errorCode == .discarded {
+                        // Newer capture superseded this job; leave UI alone.
+                        if !isRecording {
+                            currentState = .ready
+                            statusText = readyPrompt
+                        }
+                        canRetry = false
+                        return nil
+                    }
                     // Always surface the job-specific message; do not mask it as ready.
                     if let status = response.response.status {
                         applyPolishFlag(from: status)

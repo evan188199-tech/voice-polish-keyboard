@@ -87,7 +87,7 @@ actor AppleOnDeviceTranscriber: SpeechTranscribing {
         return text
     }
 
-    /// Return Apple Speech's ranked alternatives for candidate review.
+    /// Return Apple Speech's ranked alternatives for A/B compare.
     func transcribeCandidates(_ pcmData: Data, vocabulary: String) async throws -> AppleSpeechCandidates {
         _ = vocabulary
         if recognizer == nil || authorizationStatus != .authorized {
@@ -213,129 +213,6 @@ actor AppleOnDeviceTranscriber: SpeechTranscribing {
     }
 }
 
-/// Builds small, non-overlapping replacement groups from whole-utterance
-/// hypotheses.  It is deliberately conservative: punctuation-only edits and
-/// insertions/deletions are not surfaced as uncertain words.
-enum VoiceCandidateBuilder {
-    static func makeDraft(source: String, hypotheses: [AppleSpeechHypothesis]) -> VoiceDraft? {
-        let sourceUnits = Array(source.utf16)
-        guard !sourceUnits.isEmpty else { return nil }
-
-        var alternativesByRange: [UTF16TextRange: [(text: String, score: Float)]] = [:]
-        for hypothesis in hypotheses.prefix(5) {
-            let units = Array(hypothesis.text.utf16)
-            for edit in edits(from: sourceUnits, to: units) {
-                guard edit.sourceRange.length > 0, !edit.replacement.isEmpty else { continue }
-                let original = substring(source, range: edit.sourceRange) ?? ""
-                guard isMeaningful(original), isMeaningful(edit.replacement), original != edit.replacement else { continue }
-                let score = Float(5 - hypothesis.rank) + hypothesis.confidence
-                alternativesByRange[edit.sourceRange, default: []].append((edit.replacement, score))
-            }
-        }
-
-        var groups: [CandidateGroup] = []
-        for (range, candidates) in alternativesByRange {
-            var scores: [String: Float] = [:]
-            for candidate in candidates {
-                scores[candidate.text] = max(scores[candidate.text] ?? -.infinity, candidate.score)
-            }
-            let ordered = scores.sorted { lhs, rhs in
-                lhs.value == rhs.value ? lhs.key < rhs.key : lhs.value > rhs.value
-            }
-            let alternatives = ordered.prefix(4).map { $0.key }
-            if !alternatives.isEmpty {
-                groups.append(CandidateGroup(
-                    range: range,
-                    original: substring(source, range: range) ?? "",
-                    alternatives: alternatives
-                ))
-            }
-        }
-        groups.sort { lhs, rhs in
-            lhs.range.location == rhs.range.location
-                ? lhs.range.length < rhs.range.length
-                : lhs.range.location < rhs.range.location
-        }
-
-        var nonOverlapping: [CandidateGroup] = []
-        for group in groups where nonOverlapping.count < 3 {
-            let overlaps = nonOverlapping.contains { existing in
-                let end = group.range.location + group.range.length
-                let existingEnd = existing.range.location + existing.range.length
-                return group.range.location < existingEnd && existing.range.location < end
-            }
-            if !overlaps { nonOverlapping.append(group) }
-        }
-        guard !nonOverlapping.isEmpty else { return nil }
-        return VoiceDraft(id: UUID(), text: source, candidateGroups: nonOverlapping)
-    }
-
-    private struct Edit {
-        let sourceRange: UTF16TextRange
-        let replacement: String
-    }
-
-    /// LCS edit hunks. Dictation snippets are bounded by the recording limit;
-    /// the cap prevents pathological work on a pasted or malformed result.
-    private static func edits(from source: [UInt16], to target: [UInt16]) -> [Edit] {
-        guard source.count <= 360, target.count <= 360 else { return [] }
-        let rows = source.count + 1
-        let cols = target.count + 1
-        var table = Array(repeating: 0, count: rows * cols)
-        for i in stride(from: source.count - 1, through: 0, by: -1) {
-            for j in stride(from: target.count - 1, through: 0, by: -1) {
-                table[i * cols + j] = source[i] == target[j]
-                    ? table[(i + 1) * cols + j + 1] + 1
-                    : max(table[(i + 1) * cols + j], table[i * cols + j + 1])
-            }
-        }
-
-        var pairs: [(Int, Int)] = []
-        var i = 0
-        var j = 0
-        while i < source.count, j < target.count {
-            if source[i] == target[j] {
-                pairs.append((i, j)); i += 1; j += 1
-            } else if table[(i + 1) * cols + j] >= table[i * cols + j + 1] {
-                i += 1
-            } else {
-                j += 1
-            }
-        }
-
-        var edits: [Edit] = []
-        var sourceStart = 0
-        var targetStart = 0
-        for pair in pairs + [(source.count, target.count)] {
-            if pair.0 > sourceStart || pair.1 > targetStart {
-                let replacement = String(decoding: target[targetStart..<pair.1], as: UTF16.self)
-                edits.append(Edit(
-                    sourceRange: UTF16TextRange(location: sourceStart, length: pair.0 - sourceStart),
-                    replacement: replacement
-                ))
-            }
-            sourceStart = pair.0 + 1
-            targetStart = pair.1 + 1
-        }
-        return edits
-    }
-
-    private static func substring(_ text: String, range: UTF16TextRange) -> String? {
-        let utf16Count = text.utf16.count
-        guard range.location <= utf16Count,
-              range.length <= utf16Count - range.location else { return nil }
-        let start = String.Index(utf16Offset: range.location, in: text)
-        let end = String.Index(utf16Offset: range.location + range.length, in: text)
-        guard start <= end else { return nil }
-        return String(text[start..<end])
-    }
-
-    private static func isMeaningful(_ text: String) -> Bool {
-        text.unicodeScalars.contains { scalar in
-            CharacterSet.alphanumerics.contains(scalar) || (scalar.value >= 0x3400 && scalar.value <= 0x9FFF)
-        }
-    }
-}
 
 enum AppleSpeechError: LocalizedError {
     case permissionDenied
