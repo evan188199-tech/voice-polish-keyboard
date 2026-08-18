@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import UIKit
 
 @MainActor
 final class KeyboardViewModel: ObservableObject {
@@ -29,6 +30,10 @@ final class KeyboardViewModel: ObservableObject {
     @Published var askFollowUpAvailable = false
     /// Next ask capture will include conversation history.
     @Published var askFollowUpArmed = false
+    /// Local clipboard history (keyboard-authoritative).
+    @Published var clipboardEntries: [ClipboardEntry] = []
+    /// Retained locally so a host text field that rejects insertion never loses speech.
+    @Published private(set) var lastDeliveredText: String?
     private let client = KeyboardBridgeClient()
     private var timer: Timer?
     private var recordingStart: Date?
@@ -66,6 +71,7 @@ final class KeyboardViewModel: ObservableObject {
                     currentState = .ready
                 }
                 statusText = readyPrompt
+                await syncClipboardToHost()
             } catch {
                 isConnected = false
                 currentState = .inactive
@@ -75,6 +81,7 @@ final class KeyboardViewModel: ObservableObject {
             currentState = .inactive
             statusText = "请打开主应用并启动语音会话"
         }
+        reloadClipboard()
     }
 
     func disconnect() {
@@ -195,6 +202,7 @@ final class KeyboardViewModel: ObservableObject {
                 currentState = .ready
                 statusText = readyPrompt
                 canRetry = false
+                lastDeliveredText = response.response.text
                 return response.response.text
             case .error:
                 if response.response.status?.state == .recording {
@@ -222,6 +230,12 @@ final class KeyboardViewModel: ObservableObject {
             isConnected = false
             return nil
         }
+    }
+
+    func copyLastDeliveredText() {
+        guard let text = lastDeliveredText, !text.isEmpty else { return }
+        UIPasteboard.general.string = text
+        statusText = "已复制最近结果"
     }
 
     func onSwipeCancel() async {
@@ -537,6 +551,44 @@ final class KeyboardViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Clipboard history
+
+    func reloadClipboard() {
+        clipboardEntries = ClipboardHistoryStore.load()
+    }
+
+    func deleteClipboardEntry(id: String) {
+        let updated = ClipboardHistoryStore.remove(id: id, from: ClipboardHistoryStore.load())
+        ClipboardHistoryStore.save(updated)
+        clipboardEntries = updated
+        Task { await syncClipboardToHost() }
+    }
+
+    func clearClipboard() {
+        ClipboardHistoryStore.clear()
+        clipboardEntries = []
+        Task { await syncClipboardToHost(clearing: true) }
+    }
+
+    /// Push the local snapshot to the host app mirror. Best-effort.
+    private func syncClipboardToHost(clearing: Bool = false) async {
+        guard isConnected else { return }
+        do {
+            if clearing {
+                _ = try await client.send(.clearClipboardHistory)
+                return
+            }
+            let snapshot = ClipboardHistoryStore.load()
+            let response = try await client.send(.syncClipboardHistory, clipboardEntries: snapshot)
+            if let visible = response.response.clipboardEntries {
+                ClipboardHistoryStore.save(visible)
+                clipboardEntries = visible
+            }
+        } catch {
+            // Non-fatal: clipboard works fully offline from the keyboard's own store.
+        }
+    }
+
     private func pollForResult(jobID: UUID?) async -> String? {
         // Allow long multi-segment queues: ~60s total (240 * 250ms).
         for _ in 0..<240 {
@@ -555,6 +607,7 @@ final class KeyboardViewModel: ObservableObject {
                         statusText = readyPrompt
                     }
                     canRetry = false
+                    lastDeliveredText = response.response.text
                     return response.response.text
                 case .error:
                     if response.response.errorCode == .discarded {

@@ -16,6 +16,8 @@ struct PolishingSettings: Sendable {
     let apiKey: String
     let timeout: TimeInterval
     let mode: PolishMode
+    /// Optional local style profile prompt for non-answer polishing modes.
+    let styleSystemPrompt: String?
 
     let chineseScript: ChineseScriptPreference?
     /// Prior ask turns for serial follow-up; ignored by non-ask modes.
@@ -28,7 +30,8 @@ struct PolishingSettings: Sendable {
         timeout: TimeInterval = AppConstants.polishingTimeout,
         mode: PolishMode = .default,
         chineseScript: ChineseScriptPreference? = nil,
-        askHistory: [AskConversationTurn] = []
+        askHistory: [AskConversationTurn] = [],
+        styleSystemPrompt: String? = nil
     ) {
         self.baseURL = Self.normalizeBaseURL(baseURL)
         self.modelName = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -38,6 +41,7 @@ struct PolishingSettings: Sendable {
         self.timeout = max(timeout, defaultTimeout)
         self.chineseScript = chineseScript
         self.askHistory = askHistory
+        self.styleSystemPrompt = styleSystemPrompt?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Accepts OpenAI-style roots (`https://api.openai.com`), roots already ending in `/v1`,
@@ -98,8 +102,11 @@ final class APITextPolisher: TextPolishing, @unchecked Sendable {
     private let probeSystemPrompt = "Reply with exactly: ok"
 
     func polish(_ raw: String, settings: PolishingSettings) async throws -> String {
-        let prompt = settings.chineseScript.map { settings.mode.systemPromptWithScript($0) }
+        let basePrompt = settings.styleSystemPrompt.flatMap { $0.isEmpty ? nil : $0 }
             ?? settings.mode.systemPrompt
+        let prompt = settings.chineseScript.map { script in
+            basePrompt + "\n" + (script == .traditionalHK ? "請用香港繁體中文輸出。（繁體字，非簡體。）" : "请用简体中文输出。")
+        } ?? basePrompt
         if settings.mode != .askLLM {
             return try await chatCompletion(
                 userText: raw,
@@ -539,4 +546,3 @@ enum AskAnswerParser {
         return String(String.UnicodeScalarView(filtered))
     }
 }
-

@@ -18,7 +18,7 @@ enum AppConstants {
     static let absoluteMaxRecordingDuration: TimeInterval = 90
 
     /// iOS: auto-deactivate voice session after this much idle time (no hold-to-talk).
-    static let defaultSessionIdleTimeoutSeconds: TimeInterval = 300
+    static let defaultSessionIdleTimeoutSeconds: TimeInterval = 600
     /// Minimum / maximum configurable idle timeout.
     static let minimumSessionIdleTimeoutSeconds: TimeInterval = 60
     static let absoluteMaxSessionIdleTimeoutSeconds: TimeInterval = 1800

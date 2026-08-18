@@ -79,6 +79,12 @@ actor AppleOnDeviceTranscriber: SpeechTranscribing {
         self.recognizer = recognizer
     }
 
+    func removeModelFiles() async throws {
+        // System dictation owns its language pack; only release this comparison instance.
+        recognizer = nil
+        resolvedLocaleIdentifier = nil
+    }
+
     func transcribe(_ pcmData: Data, vocabulary: String) async throws -> String {
         let candidates = try await transcribeCandidates(pcmData, vocabulary: vocabulary)
         guard let text = candidates.hypotheses.first?.text, !text.isEmpty else {

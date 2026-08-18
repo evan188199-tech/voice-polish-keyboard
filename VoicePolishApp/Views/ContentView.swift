@@ -7,6 +7,8 @@ struct ContentView: View {
     @State private var showSettings = false
     @State private var showVocab = false
     @State private var showGuide = false
+    @State private var showClipboard = false
+    @State private var showHistory = false
     @State private var modelReady = false
     @State private var activating = false
 
@@ -16,6 +18,7 @@ struct ContentView: View {
                 VStack(spacing: 16) {
                     onboarding
                     statusCard
+                    usageStats
                     actionButtons
                     if coordinator.lastTranscription != nil
                         || coordinator.lastPolished != nil
@@ -50,6 +53,12 @@ struct ContentView: View {
                 VocabularyView(settings: settings)
             }
             .sheet(isPresented: $showGuide) { KeyboardGuideView() }
+            .sheet(isPresented: $showClipboard) {
+                ClipboardHistoryView(mirror: ClipboardMirrorStore.shared)
+            }
+            .sheet(isPresented: $showHistory) {
+                DictationHistoryView(store: DictationHistoryStore.shared)
+            }
             .task {
                 await coordinator.refreshModelPresence()
                 modelReady = await coordinator.isModelReady
@@ -109,15 +118,25 @@ struct ContentView: View {
                             }
                         }
                         .buttonStyle(.borderedProminent)
-                        Text("手机直连 Hugging Face 可能很慢或卡在 0%。可在 Mac 上运行 scripts/seed_model_to_device.sh 一键推送本地模型。")
+                        Text("手机直连 Hugging Face 可能很慢或卡在 0%。也可使用 scripts/seed_model_to_device.sh 从开发机预置模型。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                 }
             } else {
-                Label("模型已就绪", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                    .font(.subheadline)
+                HStack {
+                    Label("模型已就绪", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                        .font(.subheadline)
+                    Spacer()
+                    Button("删除模型", role: .destructive) {
+                        Task {
+                            try? await coordinator.deleteModel()
+                            modelReady = await coordinator.isModelReady
+                        }
+                    }
+                    .font(.caption)
+                }
             }
         }
         .padding()
@@ -179,6 +198,26 @@ struct ContentView: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 
+    private var usageStats: some View {
+        let stats = DictationHistoryStore.shared.statistics
+        return HStack(spacing: 12) {
+            statItem("记录", "\(stats.totalCount)")
+            statItem("识别中位", stats.medianTranscriptionLatencyMs.map { "\($0) ms" } ?? "—")
+            statItem("润色中位", stats.medianPolishingLatencyMs.map { "\($0) ms" } ?? "—")
+            statItem("失败", "\(Int((stats.failureRate * 100).rounded()))%")
+        }
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func statItem(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title).font(.caption2).foregroundStyle(.secondary)
+            Text(value).font(.caption.weight(.semibold)).monospacedDigit()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private var statusIcon: some View {
         Group {
             switch coordinator.state {
@@ -210,6 +249,12 @@ struct ContentView: View {
 
     private var actionButtons: some View {
         VStack(spacing: 12) {
+            Button { showHistory = true } label: {
+                Label("语音历史", systemImage: "waveform")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.bordered)
+
             HStack(spacing: 12) {
                 switch coordinator.state {
                 case .inactive, .error:
@@ -434,6 +479,12 @@ struct ContentView: View {
 
     private var shortcuts: some View {
         VStack(spacing: 12) {
+            Button { showClipboard = true } label: {
+                Label("剪切板历史", systemImage: "list.clipboard")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.bordered)
+
             Button { showVocab = true } label: {
                 Label("专有词词表", systemImage: "book.pages")
                     .frame(maxWidth: .infinity, alignment: .leading)

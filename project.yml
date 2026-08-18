@@ -3,7 +3,6 @@ options:
   bundleIdPrefix: com.voicepolish
   deploymentTarget:
     iOS: "18.0"
-    macOS: "14.0"
   xcodeVersion: "16.0"
   generateEmptyDirectories: true
   createIntermediateGroups: true
@@ -22,16 +21,14 @@ targets:
     sources:
       - path: VoicePolishApp
       - path: Shared
-        excludes:
-          - "InputMethod/**"
     settings:
       base:
         INFOPLIST_FILE: VoicePolishApp/Info.plist
         PRODUCT_BUNDLE_IDENTIFIER: com.voicepolish.app
         PRODUCT_NAME: VoicePolishApp
         CODE_SIGN_ENTITLEMENTS: VoicePolishApp/VoicePolishApp.entitlements
-        CURRENT_PROJECT_VERSION: 1
-        MARKETING_VERSION: 1.0
+        CURRENT_PROJECT_VERSION: 5
+        MARKETING_VERSION: 1.3
         TARGETED_DEVICE_FAMILY: "1"
         IPHONEOS_DEPLOYMENT_TARGET: "18.0"
     dependencies:
@@ -53,9 +50,9 @@ targets:
       - path: Shared
         excludes:
           - "Core/**"
-          - "InputMethod/**"
       - path: Shared/Core/PolishMode.swift
       - path: Shared/Core/ChineseScriptConverter.swift
+      - path: Shared/Core/ClipboardHistory.swift
     settings:
       base:
         INFOPLIST_FILE: Keyboard/Info.plist
@@ -63,8 +60,8 @@ targets:
         PRODUCT_NAME: Keyboard
         CODE_SIGN_ENTITLEMENTS: Keyboard/Keyboard.entitlements
         SKIP_INSTALL: true
-        CURRENT_PROJECT_VERSION: 1
-        MARKETING_VERSION: 1.0
+        CURRENT_PROJECT_VERSION: 5
+        MARKETING_VERSION: 1.3
         TARGETED_DEVICE_FAMILY: "1"
         IPHONEOS_DEPLOYMENT_TARGET: "18.0"
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks"
@@ -76,6 +73,9 @@ targets:
     platform: iOS
     sources:
       - path: Tests/VoicePolishKeyboardTests.swift
+      - path: Tests/ClipboardHistoryTests.swift
+      - path: Tests/ShiftStateTests.swift
+      - path: Tests/VoicePipelineTests.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.voicepolish.tests
@@ -84,154 +84,6 @@ targets:
         IPHONEOS_DEPLOYMENT_TARGET: "18.0"
     dependencies:
       - target: VoicePolishApp
-
-  MacCompanion:
-    type: application
-    platform: macOS
-    supportedDestinations: [macOS]
-    sources:
-      - path: MacCompanion
-      - path: Shared
-        excludes:
-          - "InputMethod/**"
-    settings:
-      base:
-        INFOPLIST_FILE: MacCompanion/Info.plist
-        PRODUCT_BUNDLE_IDENTIFIER: com.voicepolish.mac
-        PRODUCT_NAME: VoicePolishMac
-        CODE_SIGN_ENTITLEMENTS: MacCompanion/MacCompanion.entitlements
-        # Xcode CodeSign fails under iCloud Documents (FinderInfo/fileprovider xattrs).
-        # Real signing is done by scripts/install_macos.sh after staging outside Documents.
-        CODE_SIGNING_ALLOWED: "NO"
-        CODE_SIGNING_REQUIRED: "NO"
-        CODE_SIGN_IDENTITY: ""
-        CODE_SIGN_STYLE: Manual
-        DEVELOPMENT_TEAM: ""
-        PROVISIONING_PROFILE_SPECIFIER: ""
-        EXPANDED_CODE_SIGN_IDENTITY: ""
-        CODE_SIGN_INJECT_BASE_ENTITLEMENTS: "NO"
-        CURRENT_PROJECT_VERSION: 1
-        MARKETING_VERSION: 1.0
-        MACOSX_DEPLOYMENT_TARGET: "14.0"
-        ARCHS: arm64
-        ONLY_ACTIVE_ARCH: YES
-        COMBINE_HIDPI_IMAGES: YES
-        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
-    dependencies:
-      - package: SherpaOnnxLocal
-        product: SherpaOnnx
-    preBuildScripts:
-      - name: Strip vendor codesign detritus
-        basedOnDependencyAnalysis: false
-        script: |
-          "${SRCROOT}/scripts/strip_codesign_detritus.sh" "${SRCROOT}/Vendor/Frameworks"
-    postCompileScripts:
-      # Reordered to last build phase by scripts/fix_macos_xcodeproj.py (after Frameworks).
-      - name: Strip product codesign detritus
-        basedOnDependencyAnalysis: false
-        script: |
-          set -euo pipefail
-          export COPYFILE_DISABLE=1
-          PRODUCT_PATH="${TARGET_BUILD_DIR}/${FULL_PRODUCT_NAME}"
-          if [[ -e "$PRODUCT_PATH" ]]; then
-            STAGE="/tmp/vpk-strip-${TARGET_NAME}-$$"
-            rm -rf "$STAGE"
-            mkdir -p "$STAGE"
-            ditto --norsrc --noextattr "$PRODUCT_PATH" "$STAGE/product"
-            rm -rf "$PRODUCT_PATH"
-            ditto --norsrc --noextattr "$STAGE/product" "$PRODUCT_PATH"
-            rm -rf "$STAGE"
-            "${SRCROOT}/scripts/strip_codesign_detritus.sh" "$PRODUCT_PATH"
-            # Drop static onnxruntime embed / convert shallow frameworks before Validate.
-            "${SRCROOT}/scripts/fix_macos_embedded_frameworks.sh" "$PRODUCT_PATH" || true
-          fi
-          if [[ -n "${BUILT_PRODUCTS_DIR:-}" ]]; then
-            "${SRCROOT}/scripts/strip_codesign_detritus.sh"               "${BUILT_PRODUCTS_DIR}/onnxruntime.framework"               "${BUILT_PRODUCTS_DIR}/SherpaOnnxC.framework"               "${BUILT_PRODUCTS_DIR}/PackageFrameworks" || true
-          fi
-    entitlements:
-      path: MacCompanion/MacCompanion.entitlements
-    scheme:
-      testTargets:
-        - MacVoicePolishTests
-
-  MacInputMethod:
-    type: application
-    platform: macOS
-    supportedDestinations: [macOS]
-    sources:
-      - path: MacInputMethod
-      - path: Shared/Constants.swift
-      - path: Shared/Protocol
-      - path: Shared/InputMethod
-      - path: Shared/Core/PolishMode.swift
-      - path: Shared/Core/ChineseScriptConverter.swift
-    settings:
-      base:
-        INFOPLIST_FILE: MacInputMethod/Info.plist
-        PRODUCT_BUNDLE_IDENTIFIER: com.voicepolish.inputmethod
-        PRODUCT_NAME: VoicePolishInputMethod
-        CODE_SIGN_ENTITLEMENTS: MacInputMethod/MacInputMethod.entitlements
-        CODE_SIGNING_ALLOWED: "NO"
-        CODE_SIGNING_REQUIRED: "NO"
-        CODE_SIGN_IDENTITY: ""
-        CODE_SIGN_STYLE: Manual
-        DEVELOPMENT_TEAM: ""
-        PROVISIONING_PROFILE_SPECIFIER: ""
-        EXPANDED_CODE_SIGN_IDENTITY: ""
-        CODE_SIGN_INJECT_BASE_ENTITLEMENTS: "NO"
-        CURRENT_PROJECT_VERSION: 1
-        MARKETING_VERSION: 1.0
-        MACOSX_DEPLOYMENT_TARGET: "14.0"
-        ARCHS: arm64
-        ONLY_ACTIVE_ARCH: YES
-        SKIP_INSTALL: false
-        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
-    preBuildScripts:
-      - name: Strip vendor codesign detritus
-        basedOnDependencyAnalysis: false
-        script: |
-          "${SRCROOT}/scripts/strip_codesign_detritus.sh" "${SRCROOT}/Vendor/Frameworks"
-    postCompileScripts:
-      - name: Strip product codesign detritus
-        basedOnDependencyAnalysis: false
-        script: |
-          set -euo pipefail
-          export COPYFILE_DISABLE=1
-          PRODUCT_PATH="${TARGET_BUILD_DIR}/${FULL_PRODUCT_NAME}"
-          if [[ -e "$PRODUCT_PATH" ]]; then
-            STAGE="/tmp/vpk-strip-${TARGET_NAME}-$$"
-            rm -rf "$STAGE"
-            mkdir -p "$STAGE"
-            ditto --norsrc --noextattr "$PRODUCT_PATH" "$STAGE/product"
-            rm -rf "$PRODUCT_PATH"
-            ditto --norsrc --noextattr "$STAGE/product" "$PRODUCT_PATH"
-            rm -rf "$STAGE"
-            "${SRCROOT}/scripts/strip_codesign_detritus.sh" "$PRODUCT_PATH"
-          fi
-    entitlements:
-      path: MacInputMethod/MacInputMethod.entitlements
-    scheme: {}
-
-  MacVoicePolishTests:
-    type: bundle.unit-test
-    platform: macOS
-    sources:
-      - path: Tests/Mac
-      - path: Shared/Constants.swift
-      - path: Shared/Protocol
-      - path: Shared/InputMethod
-      - path: Shared/Core/LocalTextProcessor.swift
-      - path: Shared/Core/PolishMode.swift
-      - path: Shared/Core/ChineseScriptConverter.swift
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.voicepolish.mactests
-        GENERATE_INFOPLIST_FILE: YES
-        MACOSX_DEPLOYMENT_TARGET: "14.0"
-        ARCHS: arm64
-        # Pure unit tests; no host app required.
-        USE_HEADERMAP: YES
-    scheme: {}
 
 packages:
   SherpaOnnxLocal:

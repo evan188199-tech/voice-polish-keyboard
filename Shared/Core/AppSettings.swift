@@ -29,6 +29,16 @@ final class AppSettings: ObservableObject {
     private var isApplyingProfile = false
 
     @Published var polishProfiles: [PolishAPIProfile] = []
+    @Published var styleProfiles: [StyleProfile] = StyleProfile.builtins
+    @Published var activeStyleProfileID: String = "builtin.rewrite" {
+        didSet {
+            guard isLoaded else { return }
+            if let style = activeStyleProfile {
+                polishMode = style.mode
+            }
+            save()
+        }
+    }
     @Published var activePolishProfileID: String = "" {
         didSet {
             guard isLoaded, !isApplyingProfile else { return }
@@ -62,7 +72,7 @@ final class AppSettings: ObservableObject {
             save()
         }
     }
-    /// iOS: auto-close voice session after idle (no hold-to-talk). macOS companion ignores this.
+    /// Auto-close the iOS voice session after idle (no hold-to-talk).
     @Published var sessionIdleTimeoutEnabled: Bool {
         didSet {
             guard isLoaded else { return }
@@ -98,34 +108,15 @@ final class AppSettings: ObservableObject {
             save()
         }
     }
-    /// macOS: launch companion at login (default true).
-    @Published var launchAtLogin: Bool {
-        didSet {
-            guard isLoaded else { return }
-            save()
-            #if os(macOS)
-            LaunchAtLoginHelper.setEnabled(launchAtLogin)
-            #endif
-        }
-    }
-    /// macOS: global Right Option push-to-talk fallback (default true).
-    /// When false, companion stops listening for Right Option outside the IME path.
-    @Published var rightOptionHotkeyEnabled: Bool {
-        didSet {
-            guard isLoaded else { return }
-            save()
-            #if os(macOS)
-            NotificationCenter.default.post(
-                name: .voicePolishRightOptionHotkeyEnabledDidChange,
-                object: nil,
-                userInfo: ["enabled": rightOptionHotkeyEnabled]
-            )
-            #endif
-        }
-    }
-
     /// Output script preference: simplified / traditionalHK.  Defaults to simplified.
     @Published var chineseScript: ChineseScriptPreference {
+        didSet {
+            guard isLoaded else { return }
+            save()
+        }
+    }
+    /// Auto-capture the system clipboard when the keyboard appears (default true).
+    @Published var clipboardHistoryEnabled: Bool {
         didSet {
             guard isLoaded else { return }
             save()
@@ -141,6 +132,14 @@ final class AppSettings: ObservableObject {
         } else {
             sessionIdleTimeoutEnabled = defaults.bool(forKey: "session_idle_timeout_enabled")
         }
+        if !defaults.bool(forKey: "session_idle_timeout_migrated_v1") {
+            defaults.set(true, forKey: "session_idle_timeout_migrated_v1")
+            let rawIdle = defaults.object(forKey: "session_idle_timeout_seconds") as? Double
+            if rawIdle == 300 {
+                defaults.set(600.0, forKey: "session_idle_timeout_seconds")
+            }
+        }
+
         let idle = defaults.double(forKey: "session_idle_timeout_seconds")
         if idle > 0 {
             sessionIdleTimeoutSeconds = min(
@@ -166,29 +165,48 @@ final class AppSettings: ObservableObject {
         } else {
             compareWithSystemDictation = defaults.bool(forKey: "compare_with_system_dictation")
         }
-        if defaults.object(forKey: "launch_at_login") == nil {
-            launchAtLogin = true
-        } else {
-            launchAtLogin = defaults.bool(forKey: "launch_at_login")
-        }
-        if defaults.object(forKey: "right_option_hotkey_enabled") == nil {
-            rightOptionHotkeyEnabled = true
-        } else {
-            rightOptionHotkeyEnabled = defaults.bool(forKey: "right_option_hotkey_enabled")
-        }
         if let rawScript = defaults.string(forKey: "chinese_script"),
            let pref = ChineseScriptPreference(rawValue: rawScript) {
             chineseScript = pref
         } else {
             chineseScript = .default
         }
+        if defaults.object(forKey: "clipboard_history_enabled") == nil {
+            clipboardHistoryEnabled = true
+        } else {
+            clipboardHistoryEnabled = defaults.bool(forKey: "clipboard_history_enabled")
+        }
 
         loadOrMigrateProfiles(defaults: defaults)
+        loadOrMigrateStyles(defaults: defaults)
         isLoaded = true
     }
 
     var activePolishProfile: PolishAPIProfile? {
         polishProfiles.first(where: { $0.id == activePolishProfileID }) ?? polishProfiles.first
+    }
+
+    var activeStyleProfile: StyleProfile? {
+        styleProfiles.first(where: { $0.id == activeStyleProfileID })
+            ?? styleProfiles.first(where: { $0.id == "builtin.rewrite" })
+    }
+
+    func saveStyle(_ style: StyleProfile) {
+        guard !style.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        if let index = styleProfiles.firstIndex(where: { $0.id == style.id }) {
+            styleProfiles[index] = style
+        } else {
+            styleProfiles.append(style)
+        }
+        activeStyleProfileID = style.id
+        save()
+    }
+
+    func deleteStyle(id: String) {
+        guard let index = styleProfiles.firstIndex(where: { $0.id == id }), !styleProfiles[index].isBuiltin else { return }
+        styleProfiles.remove(at: index)
+        if activeStyleProfileID == id { activeStyleProfileID = "builtin.rewrite" }
+        save()
     }
 
     var hasAPIKey: Bool {
@@ -347,6 +365,31 @@ final class AppSettings: ObservableObject {
         save()
     }
 
+    private func loadOrMigrateStyles(defaults: UserDefaults) {
+        let custom: [StyleProfile]
+        if let data = defaults.data(forKey: "style_profiles_v1"),
+           let decoded = try? JSONDecoder().decode([StyleProfile].self, from: data) {
+            custom = decoded.filter { !$0.isBuiltin }
+        } else {
+            custom = []
+        }
+        styleProfiles = StyleProfile.builtins + custom
+        let saved = defaults.string(forKey: "active_style_profile_id") ?? ""
+        if styleProfiles.contains(where: { $0.id == saved }) {
+            activeStyleProfileID = saved
+        } else {
+            activeStyleProfileID = builtinStyleID(for: polishMode)
+        }
+    }
+
+    private func builtinStyleID(for mode: PolishMode) -> String {
+        switch mode {
+        case .correctOnly: return "builtin.correct"
+        case .coding: return "builtin.coding"
+        case .rewrite, .askLLM: return "builtin.rewrite"
+        }
+    }
+
     private func applyActiveProfileToFields() {
         guard let profile = activePolishProfile else { return }
         isApplyingProfile = true
@@ -369,10 +412,14 @@ final class AppSettings: ObservableObject {
         defaults.set(polishEnabled, forKey: "polish_enabled")
         defaults.set(polishMode.rawValue, forKey: "polish_mode")
         defaults.set(compareWithSystemDictation, forKey: "compare_with_system_dictation")
-        defaults.set(launchAtLogin, forKey: "launch_at_login")
-        defaults.set(rightOptionHotkeyEnabled, forKey: "right_option_hotkey_enabled")
         defaults.set(chineseScript.rawValue, forKey: "chinese_script")
+        defaults.set(clipboardHistoryEnabled, forKey: "clipboard_history_enabled")
         defaults.set(activePolishProfileID, forKey: "active_polish_profile_id")
+        defaults.set(activeStyleProfileID, forKey: "active_style_profile_id")
+        let customStyles = styleProfiles.filter { !$0.isBuiltin }
+        if let data = try? JSONEncoder().encode(customStyles) {
+            defaults.set(data, forKey: "style_profiles_v1")
+        }
         if let data = try? JSONEncoder().encode(polishProfiles) {
             defaults.set(data, forKey: "polish_api_profiles")
         }
@@ -421,30 +468,3 @@ enum KeychainHelper {
         ] as CFDictionary)
     }
 }
-
-#if os(macOS)
-import ServiceManagement
-
-extension Notification.Name {
-    static let voicePolishRightOptionHotkeyEnabledDidChange =
-        Notification.Name("voicePolishRightOptionHotkeyEnabledDidChange")
-}
-
-enum LaunchAtLoginHelper {
-    static func setEnabled(_ enabled: Bool) {
-        do {
-            if enabled {
-                try SMAppService.mainApp.register()
-            } else {
-                try SMAppService.mainApp.unregister()
-            }
-        } catch {
-            NSLog("LaunchAtLogin failed: \(error.localizedDescription)")
-        }
-    }
-
-    static var isEnabled: Bool {
-        SMAppService.mainApp.status == .enabled
-    }
-}
-#endif

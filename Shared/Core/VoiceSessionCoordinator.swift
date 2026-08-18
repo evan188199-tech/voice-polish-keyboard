@@ -19,6 +19,7 @@ final class VoiceSessionCoordinator: ObservableObject {
     @Published private(set) var modelFilesPresent = false
     @Published private(set) var inputLevel: Float = 0
     @Published private(set) var lastErrorCode: BridgeErrorCode?
+    @Published private(set) var lastRecoverableResult: String?
     /// Submitted jobs not yet consumed by a client.
     @Published private(set) var pendingCount: Int = 0
     /// Human-readable system input name, e.g. "AirPods 麦克风".
@@ -40,6 +41,7 @@ final class VoiceSessionCoordinator: ObservableObject {
     private var appleTranscriber: AppleOnDeviceTranscriber?
 #endif
     private let polisher: TextPolishing = APITextPolisher()
+    private let historyStore = DictationHistoryStore.shared
     private var bridgeServer: KeyboardBridgeServer?
     private var settings: AppSettings?
     private var audioTask: Task<Void, Never>?
@@ -95,6 +97,7 @@ final class VoiceSessionCoordinator: ObservableObject {
         let compareWithSystemDictation: Bool
         /// Prior ask turns when this job is an armed follow-up.
         let askHistory: [AskConversationTurn]
+        let styleSystemPrompt: String?
     }
 
     private final class VoiceJob {
@@ -111,14 +114,24 @@ final class VoiceSessionCoordinator: ObservableObject {
         var polishFailed = false
         var errorMessage: String?
         var primaryLatencyMs: Int?
+        var polishLatencyMs: Int?
+        let recordingDurationMs: Int
         var delivered = false
 
-        init(id: UUID, sequence: UInt64, pcmData: Data, snapshot: JobSnapshot, generation: UInt64) {
+        init(
+            id: UUID,
+            sequence: UInt64,
+            pcmData: Data,
+            snapshot: JobSnapshot,
+            generation: UInt64,
+            recordingDurationMs: Int
+        ) {
             self.id = id
             self.sequence = sequence
             self.pcmData = pcmData
             self.snapshot = snapshot
             self.generation = generation
+            self.recordingDurationMs = recordingDurationMs
         }
     }
 
@@ -322,7 +335,7 @@ final class VoiceSessionCoordinator: ObservableObject {
 
         Task {
             recorder.cancelRecording()
-            await recorder.stopSession()
+            recorder.stopSession()
             await server?.stop()
         }
 
@@ -384,6 +397,16 @@ final class VoiceSessionCoordinator: ObservableObject {
         }
     }
 
+    func deleteModel() async throws {
+        guard state == .inactive || state == .error else { throw TranscriberError.modelInUse }
+        guard let transcriber else { throw TranscriberError.notReady }
+        try await transcriber.removeModelFiles()
+        modelFilesPresent = false
+        downloadProgress = nil
+        preparePhase = nil
+        statusMessage = "本地模型已删除"
+    }
+
     var isModelReady: Bool {
         get async { await transcriber?.isReady ?? false }
     }
@@ -427,11 +450,7 @@ final class VoiceSessionCoordinator: ObservableObject {
         }
         guard state != .recording else { return true }
 
-        // Latest segment wins: drop every older uninserted job immediately.
-        discardUninsertedPipeline()
-
         captureEpoch &+= 1
-        let epoch = captureEpoch
         state = .recording
         elapsedSeconds = 0
         inputLevel = 0
@@ -445,8 +464,8 @@ final class VoiceSessionCoordinator: ObservableObject {
         audioTask = Task { [weak self] in
             guard let self else { return }
             while !Task.isCancelled {
-                let elapsed = await self.recorder.elapsed
-                let level = await self.recorder.latestLevel
+                let elapsed = self.recorder.elapsed
+                let level = self.recorder.latestLevel
                 await MainActor.run {
                     self.elapsedSeconds = elapsed
                     self.inputLevel = level
@@ -484,6 +503,7 @@ final class VoiceSessionCoordinator: ObservableObject {
         state = .transcribing
         statusMessage = "提交中…"
 
+        let recordingDurationMs = max(Int(recorder.elapsed * 1_000), 0)
         let data = recorder.finishRecording()
         let jobID = UUID()
         let sequence = nextSequence
@@ -493,11 +513,13 @@ final class VoiceSessionCoordinator: ObservableObject {
             sequence: sequence,
             pcmData: data,
             snapshot: snapshot,
-            generation: pipelineGeneration
+            generation: pipelineGeneration,
+            recordingDurationMs: recordingDurationMs
         )
         jobs[jobID] = job
         jobOrder.append(jobID)
         asrQueue.append(jobID)
+        PipelineDiagnostics.record(jobID: jobID, phase: .queued, elapsedMs: recordingDurationMs)
         isFinalizingCapture = false
         refreshProcessingStatus()
         kickASRWorker()
@@ -578,6 +600,7 @@ final class VoiceSessionCoordinator: ObservableObject {
         lastTranscription = nil
         lastPolished = nil
         lastPolishFailed = false
+        lastRecoverableResult = nil
         clearCompareFields()
     }
 
@@ -806,7 +829,8 @@ final class VoiceSessionCoordinator: ObservableObject {
             apiKey: settings.apiKey ?? "",
             chineseScript: settings.chineseScript,
             compareWithSystemDictation: settings.compareWithSystemDictation,
-            askHistory: history
+            askHistory: history,
+            styleSystemPrompt: makeStylePrompt(from: settings)
         )
     }
 
@@ -817,6 +841,17 @@ final class VoiceSessionCoordinator: ObservableObject {
         lastCompareLatencyMs = nil
         compareLocaleIdentifier = nil
         compareEngineDisplayName = AppleSpeechLocaleSelector.displayName(for: nil)
+    }
+
+    private func makeStylePrompt(from settings: AppSettings) -> String? {
+        guard settings.polishMode != .askLLM,
+              let custom = settings.activeStyleProfile?.customSystemPrompt,
+              !custom.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        // Keep the non-answering rewrite contract even when the user supplies
+        // a style preference. Style text can shape form, never turn dictation
+        // into an assistant request.
+        return PolishMode.rewrite.systemPrompt + "\n\n额外风格偏好：\n" + custom
     }
 
     // MARK: - Status while recording vs processing
@@ -1048,6 +1083,7 @@ final class VoiceSessionCoordinator: ObservableObject {
         guard let job = jobs[jobID], !job.delivered else { return }
         guard job.generation == pipelineGeneration else { return }
         job.phase = .transcribing
+        PipelineDiagnostics.record(jobID: jobID, phase: .transcribing)
         refreshProcessingStatus()
 
         guard let transcriber else {
@@ -1062,6 +1098,7 @@ final class VoiceSessionCoordinator: ObservableObject {
             let raw = try await transcriber.transcribe(job.pcmData, vocabulary: job.snapshot.vocabulary)
             guard job.generation == pipelineGeneration, jobs[jobID] != nil else { return }
             job.primaryLatencyMs = elapsedMilliseconds(since: started)
+            PipelineDiagnostics.record(jobID: jobID, phase: .transcribing, elapsedMs: job.primaryLatencyMs)
             lastPrimaryLatencyMs = job.primaryLatencyMs
 
             // SenseVoice already ran LocalTextProcessor per VAD segment.
@@ -1157,11 +1194,16 @@ final class VoiceSessionCoordinator: ObservableObject {
             apiKey: job.snapshot.apiKey,
             mode: job.snapshot.polishMode,
             chineseScript: job.snapshot.chineseScript,
-            askHistory: job.snapshot.askHistory
+            askHistory: job.snapshot.askHistory,
+            styleSystemPrompt: job.snapshot.styleSystemPrompt
         )
         do {
+            PipelineDiagnostics.record(jobID: jobID, phase: .polishing)
+            let started = ContinuousClock.now
             let polished = try await polishWithTimeout(local, settings: polishing)
             guard job.generation == pipelineGeneration, jobs[jobID] != nil else { return }
+            job.polishLatencyMs = elapsedMilliseconds(since: started)
+            PipelineDiagnostics.record(jobID: jobID, phase: .polishing, elapsedMs: job.polishLatencyMs)
             // Keep the model's content, then apply lightweight local casing and
             // vocabulary normalization so polished output also respects entries
             // such as "EUPB" / "iPhone Air".
@@ -1211,6 +1253,17 @@ final class VoiceSessionCoordinator: ObservableObject {
         job.finalText = finalText
         job.phase = .ready
         job.errorMessage = nil
+        PipelineDiagnostics.record(jobID: job.id, phase: .delivering)
+        historyStore.append(
+            DictationHistoryEntry(
+                id: job.id,
+                transcript: job.localText ?? "",
+                result: finalText,
+                mode: job.snapshot.polishMode,
+                transcriptionLatencyMs: job.primaryLatencyMs,
+                polishingLatencyMs: job.polishLatencyMs
+            )
+        )
 
         // Latest UI fields publish when the job reaches the delivery cursor (on consume or when head).
         if deliveryCursor.canDeliver(sequence: job.sequence) {
@@ -1224,6 +1277,18 @@ final class VoiceSessionCoordinator: ObservableObject {
         job.errorMessage = message
         job.finalText = nil
         lastErrorCode = .unknown
+        PipelineDiagnostics.record(jobID: job.id, phase: .failed, errorCode: .unknown)
+        historyStore.append(
+            DictationHistoryEntry(
+                id: job.id,
+                transcript: job.localText ?? "",
+                result: nil,
+                mode: job.snapshot.polishMode,
+                transcriptionLatencyMs: job.primaryLatencyMs,
+                polishingLatencyMs: job.polishLatencyMs,
+                errorMessage: message
+            )
+        )
         if state != .recording {
             statusMessage = "\(message) · 已跳过该段"
         }
@@ -1237,6 +1302,7 @@ final class VoiceSessionCoordinator: ObservableObject {
         lastPolished = job.polishedText
         lastPolishFailed = job.polishFailed
         lastResult = job.finalText
+        lastRecoverableResult = job.finalText
         if let ms = job.primaryLatencyMs {
             lastPrimaryLatencyMs = ms
         }

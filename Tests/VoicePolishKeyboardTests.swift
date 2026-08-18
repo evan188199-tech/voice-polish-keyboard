@@ -1046,6 +1046,50 @@ final class VoicePolishKeyboardTests: XCTestCase {
         XCTAssertEqual(count, frozen, "deallocated controller must not keep deleting")
     }
 
+
+    func testSessionIdleTimeoutDefaultsAndMigration() {
+        let defaults = UserDefaults.standard
+        let keys = ["session_idle_timeout_enabled", "session_idle_timeout_seconds", "session_idle_timeout_migrated_v1"]
+        let backup = keys.map { key in (key, defaults.object(forKey: key)) }
+        defer {
+            for (key, value) in backup {
+                if let value {
+                    defaults.set(value, forKey: key)
+                } else {
+                    defaults.removeObject(forKey: key)
+                }
+            }
+        }
+
+        // Case 1: Fresh install (no stored timeout) -> defaults to 600 seconds.
+        for key in keys { defaults.removeObject(forKey: key) }
+        let freshSettings = AppSettings()
+        XCTAssertEqual(freshSettings.sessionIdleTimeoutSeconds, 600)
+        XCTAssertTrue(defaults.bool(forKey: "session_idle_timeout_migrated_v1"))
+
+        // Case 2: Existing install with old default (300 seconds) -> migrated to 600.
+        for key in keys { defaults.removeObject(forKey: key) }
+        defaults.set(300.0, forKey: "session_idle_timeout_seconds")
+        let oldDefaultSettings = AppSettings()
+        XCTAssertEqual(oldDefaultSettings.sessionIdleTimeoutSeconds, 600)
+        XCTAssertEqual(defaults.double(forKey: "session_idle_timeout_seconds"), 600)
+        XCTAssertTrue(defaults.bool(forKey: "session_idle_timeout_migrated_v1"))
+
+        // Case 3: Custom user value (e.g. 120 seconds) -> preserved.
+        for key in keys { defaults.removeObject(forKey: key) }
+        defaults.set(120.0, forKey: "session_idle_timeout_seconds")
+        let customSettings = AppSettings()
+        XCTAssertEqual(customSettings.sessionIdleTimeoutSeconds, 120)
+
+        // Case 4: Disabled timeout -> preserved while timeout value migrates if 300.
+        for key in keys { defaults.removeObject(forKey: key) }
+        defaults.set(false, forKey: "session_idle_timeout_enabled")
+        defaults.set(300.0, forKey: "session_idle_timeout_seconds")
+        let disabledSettings = AppSettings()
+        XCTAssertFalse(disabledSettings.sessionIdleTimeoutEnabled)
+        XCTAssertEqual(disabledSettings.sessionIdleTimeoutSeconds, 600)
+    }
+
     private static func makeSineBuffer(format: AVAudioFormat, frames: AVAudioFrameCount, frequency: Double) -> AVAudioPCMBuffer? {
         guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else { return nil }
         buffer.frameLength = frames

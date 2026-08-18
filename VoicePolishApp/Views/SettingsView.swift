@@ -176,6 +176,23 @@ struct SettingsView: View {
                     Text("可保存多套配置并切换。Base URL 支持根地址或带 /v1 的反代（如 https://opencode.ai/zen/go/v1）。OpenCode Go 上 mimo-v2-omni 目前 chat 不可用，建议用 mimo-v2.5 等文本模型。关闭润色或留空 Key 时仅本地转写。")
                 }
 
+                Section {
+                    NavigationLink {
+                        StyleProfilesView(settings: settings)
+                    } label: {
+                        HStack {
+                            Text("当前风格")
+                            Spacer()
+                            Text(settings.activeStyleProfile?.name ?? "自然润色")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("输入风格")
+                } footer: {
+                    Text("内置纠错、代码、自然润色与结构化提示词；可创建仅存本机的自定义整理风格。")
+                }
+
 
 
                 Section {
@@ -184,6 +201,14 @@ struct SettingsView: View {
                     Text("ASR 对照（主 App）")
                 } footer: {
                     Text("开启后，主 App 录音会并行跑 SenseVoice 与系统端侧听写并排展示。键盘插字仍只用 SenseVoice。需要系统语音识别权限，且设备需支持对应语言的离线听写。")
+                }
+
+                Section {
+                    Toggle("自动记下剪切板", isOn: $settings.clipboardHistoryEnabled)
+                } header: {
+                    Text("剪切板历史")
+                } footer: {
+                    Text("开启后，键盘每次唤出时会自动读一次当前剪切板并记入历史（最多 50 条，7 天后自动清理）。iOS 限制：键盘在后台无法监听剪切板，所以复制后需要让键盘弹出一次才能入库；读剪切板时系统可能弹出“粘贴自 XX”提示，属于系统隐私机制，无法完全消除。")
                 }
 
                 Section {
@@ -235,6 +260,18 @@ struct SettingsView: View {
                 } header: {
                     Text("键盘安装")
                 }
+
+                Section {
+                    HStack {
+                        Text("版本")
+                        Spacer()
+                        Text(appVersion)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                } header: {
+                    Text("关于")
+                }
             }
             .navigationTitle("设置")
             .onAppear { loadDraftFromSettings() }
@@ -245,6 +282,13 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    private var appVersion: String {
+        let info = Bundle.main.infoDictionary
+        let short = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        return "v\(short) (\(build))"
     }
 
     private var idleTimeoutLabel: String {

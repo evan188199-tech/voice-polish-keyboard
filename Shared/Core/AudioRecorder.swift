@@ -1,10 +1,6 @@
 import AVFoundation
-#if os(macOS)
-import CoreAudio
-import AudioToolbox
-#endif
 
-/// Platform audio capture. iOS configures AVAudioSession; macOS uses AVAudioEngine only.
+/// iOS audio capture built on AVAudioSession and AVAudioEngine.
 /// PCM is discarded unless the coordinator calls `beginRecording()`.
 ///
 /// Follows the system default input (including AirPods HFP). On route/device
@@ -48,9 +44,6 @@ final class AudioRecorder {
     /// Rebuild operations emit their own configuration notifications after the
     /// synchronous guard has cleared. Suppress that echo to avoid a loop.
     private var suppressEngineConfigUntil = Date.distantPast
-#if os(macOS)
-    private var defaultInputListenerBlock: AudioObjectPropertyListenerBlock?
-#endif
 
     private(set) var currentInputName: String = "麦克风"
     private(set) var isInputReady = false
@@ -519,9 +512,6 @@ final class AudioRecorder {
             }
         })
 
-#if os(macOS)
-        installDefaultInputListener()
-#endif
     }
 
     private func removeObservers() {
@@ -534,9 +524,6 @@ final class AudioRecorder {
             NotificationCenter.default.removeObserver(token)
         }
         observers.removeAll()
-#if os(macOS)
-        removeDefaultInputListener()
-#endif
     }
 
 #if os(iOS)
@@ -622,47 +609,6 @@ final class AudioRecorder {
     }
 #endif
 
-#if os(macOS)
-    private func installDefaultInputListener() {
-        removeDefaultInputListener()
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultInputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-            Task { @MainActor in
-                self?.scheduleRebuild(reason: "default-input")
-            }
-        }
-        let status = AudioObjectAddPropertyListenerBlock(
-            AudioObjectID(kAudioObjectSystemObject),
-            &address,
-            DispatchQueue.main,
-            block
-        )
-        if status == noErr {
-            defaultInputListenerBlock = block
-        }
-    }
-
-    private func removeDefaultInputListener() {
-        guard let block = defaultInputListenerBlock else { return }
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultInputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        AudioObjectRemovePropertyListenerBlock(
-            AudioObjectID(kAudioObjectSystemObject),
-            &address,
-            DispatchQueue.main,
-            block
-        )
-        defaultInputListenerBlock = nil
-    }
-#endif
-
     // MARK: - Input naming
 
     private func publishInputName(_ name: String) {
@@ -672,20 +618,13 @@ final class AudioRecorder {
     }
 
     private func resolveInputName() -> String {
-#if os(iOS)
         let inputs = AVAudioSession.sharedInstance().currentRoute.inputs
         if let port = inputs.first {
             return friendlyInputName(portPortName: port.portName, portType: port.portType)
         }
         return "麦克风"
-#elseif os(macOS)
-        return macDefaultInputName() ?? "麦克风"
-#else
-        return "麦克风"
-#endif
     }
 
-#if os(iOS)
     private func friendlyInputName(portPortName: String, portType: AVAudioSession.Port) -> String {
         switch portType {
         case .builtInMic:
@@ -707,47 +646,6 @@ final class AudioRecorder {
             return portPortName.isEmpty ? "麦克风" : portPortName
         }
     }
-#endif
-
-#if os(macOS)
-    private func macDefaultInputName() -> String? {
-        var deviceID = AudioDeviceID(0)
-        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultInputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        let status = AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject),
-            &address,
-            0,
-            nil,
-            &size,
-            &deviceID
-        )
-        guard status == noErr, deviceID != kAudioObjectUnknown else { return nil }
-
-        var name: CFString?
-        var nameSize = UInt32(MemoryLayout<CFString?>.size)
-        var nameAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioObjectPropertyName,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        let nameStatus = withUnsafeMutablePointer(to: &name) { pointer in
-            AudioObjectGetPropertyData(deviceID, &nameAddress, 0, nil, &nameSize, pointer)
-        }
-        guard nameStatus == noErr, let name else { return nil }
-        let raw = name as String
-        if raw.isEmpty { return nil }
-        if raw.localizedCaseInsensitiveContains("麦克风") || raw.localizedCaseInsensitiveContains("Microphone") {
-            return raw
-        }
-        // Built-in Mac mics often read "MacBook Pro Microphone" already.
-        return raw
-    }
-#endif
 }
 
 /// Build the callback outside the @MainActor-isolated AudioRecorder type.
@@ -947,7 +845,6 @@ enum RecorderError: LocalizedError {
 
 enum MicrophonePermission {
     static func request() async -> Bool {
-        #if os(iOS)
         if #available(iOS 17.0, *) {
             return await AVAudioApplication.requestRecordPermission()
         }
@@ -956,10 +853,5 @@ enum MicrophonePermission {
                 continuation.resume(returning: granted)
             }
         }
-        #elseif os(macOS)
-        return await AVCaptureDevice.requestAccess(for: .audio)
-        #else
-        return false
-        #endif
     }
 }

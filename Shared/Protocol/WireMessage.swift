@@ -18,9 +18,13 @@ enum BridgeCommand: String, Codable, Sendable {
     case armAskFollowUp
     /// Clear ask-mode conversation history.
     case clearAskConversation
+    /// Full-snapshot sync of clipboard history (keyboard -> main app).
+    case syncClipboardHistory
+    /// Clear clipboard history (both keyboard-authoritative and main-app mirror).
+    case clearClipboardHistory
 }
 
-/// Machine-readable error codes shared by iOS keyboard and macOS input method.
+/// Machine-readable error codes shared by the iOS app and keyboard extension.
 enum BridgeErrorCode: String, Codable, Sendable, Equatable {
     case companionNotRunning
     case micDenied
@@ -103,11 +107,14 @@ struct BridgeResponse: Codable, Sendable {
     let errorCode: BridgeErrorCode?
     /// Optional async job identity.
     let jobID: UUID?
+    /// Clipboard history returned by `syncClipboardHistory`.
+    let clipboardEntries: [ClipboardEntry]?
 
     static func ok(
         status: BridgeStatus? = nil,
         message: String? = nil,
-        jobID: UUID? = nil
+        jobID: UUID? = nil,
+        clipboardEntries: [ClipboardEntry]? = nil
     ) -> BridgeResponse {
         BridgeResponse(
             outcome: .ok,
@@ -115,7 +122,8 @@ struct BridgeResponse: Codable, Sendable {
             status: status,
             message: message,
             errorCode: nil,
-            jobID: jobID
+            jobID: jobID,
+            clipboardEntries: clipboardEntries
         )
     }
 
@@ -130,7 +138,8 @@ struct BridgeResponse: Codable, Sendable {
             status: status,
             message: nil,
             errorCode: nil,
-            jobID: jobID
+            jobID: jobID,
+            clipboardEntries: nil
         )
     }
 
@@ -146,7 +155,8 @@ struct BridgeResponse: Codable, Sendable {
             status: status,
             message: msg,
             errorCode: code,
-            jobID: jobID
+            jobID: jobID,
+            clipboardEntries: nil
         )
     }
 
@@ -156,7 +166,8 @@ struct BridgeResponse: Codable, Sendable {
         status: nil,
         message: "Bad token",
         errorCode: .unauthorized,
-        jobID: nil
+        jobID: nil,
+        clipboardEntries: nil
     )
 }
 
@@ -173,6 +184,8 @@ struct WireMessage: Codable, Sendable {
     let jobID: UUID?
     /// Payload for `setChineseScript` (raw value).
     let chineseScript: String?
+    /// Payload for `syncClipboardHistory` (keyboard-authoritative snapshot).
+    let clipboardEntries: [ClipboardEntry]?
 
     init(
         command: BridgeCommand,
@@ -181,7 +194,8 @@ struct WireMessage: Codable, Sendable {
         polishEnabled: Bool? = nil,
         polishMode: String? = nil,
         jobID: UUID? = nil,
-        chineseScript: String? = nil
+        chineseScript: String? = nil,
+        clipboardEntries: [ClipboardEntry]? = nil
     ) {
         self.protocolVersion = AppConstants.protocolVersion
         self.requestID = requestID
@@ -191,6 +205,7 @@ struct WireMessage: Codable, Sendable {
         self.polishMode = polishMode
         self.jobID = jobID
         self.chineseScript = chineseScript
+        self.clipboardEntries = clipboardEntries
     }
 }
 

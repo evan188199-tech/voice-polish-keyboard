@@ -137,7 +137,8 @@ actor BridgeClient {
         polishEnabled: Bool? = nil,
         polishMode: String? = nil,
         chineseScript: String? = nil,
-        jobID: UUID? = nil
+        jobID: UUID? = nil,
+        clipboardEntries: [ClipboardEntry]? = nil
     ) async throws -> WireResponse {
         await acquireRequestSlot()
         defer { releaseRequestSlot() }
@@ -153,7 +154,8 @@ actor BridgeClient {
             polishEnabled: polishEnabled,
             polishMode: polishMode,
             jobID: jobID,
-            chineseScript: chineseScript
+            chineseScript: chineseScript,
+            clipboardEntries: clipboardEntries
         )
         let data = try BridgeFrame.encode(message)
 

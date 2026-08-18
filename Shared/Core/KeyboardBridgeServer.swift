@@ -351,6 +351,27 @@ actor KeyboardBridgeServer {
                 ),
                 over: connection
             )
+        case .syncClipboardHistory:
+            let incoming = message.clipboardEntries ?? []
+            let visible = ClipboardMirrorStore.shared.merge(incoming)
+            let status = await coordinator.currentStatus
+            BridgeServer.send(
+                response: WireResponse(
+                    requestID: message.requestID,
+                    response: .ok(status: status, message: "已同步", clipboardEntries: visible)
+                ),
+                over: connection
+            )
+        case .clearClipboardHistory:
+            ClipboardMirrorStore.shared.clear()
+            let status = await coordinator.currentStatus
+            BridgeServer.send(
+                response: WireResponse(
+                    requestID: message.requestID,
+                    response: .ok(status: status, message: "已清空剪切板镜像")
+                ),
+                over: connection
+            )
         }
     }
 }

@@ -8,6 +8,7 @@ protocol SpeechTranscribing: Sendable {
     var downloadProgress: Double? { get async }
     var preparePhase: String? { get async }
     func prepareModel() async throws
+    func removeModelFiles() async throws
     /// Transcribe raw 16 kHz mono Int16 PCM. Long audio is VAD-chunked automatically.
     func transcribe(_ pcmData: Data, vocabulary: String) async throws -> String
 }
@@ -34,14 +35,8 @@ actor SenseVoiceTranscriber: SpeechTranscribing {
     }
 
     static func defaultModelDirectory() -> URL {
-        #if os(macOS)
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("VoicePolishKeyboard", isDirectory: true)
-            .appendingPathComponent("SenseVoiceModels", isDirectory: true)
-        #else
         let base = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
             .appendingPathComponent("SenseVoiceModels", isDirectory: true)
-        #endif
         return base.appendingPathComponent(AppConstants.senseVoiceModelName, isDirectory: true)
     }
 
@@ -60,6 +55,15 @@ actor SenseVoiceTranscriber: SpeechTranscribing {
         try loadRecognizer()
         preparePhase = nil
         downloadProgress = nil
+    }
+
+    func removeModelFiles() async throws {
+        recognizer = nil
+        retainedPaths.removeAll()
+        guard FileManager.default.fileExists(atPath: modelDir.path) else { return }
+        try FileManager.default.removeItem(at: modelDir)
+        downloadProgress = nil
+        preparePhase = nil
     }
 
     func transcribe(_ pcmData: Data, vocabulary: String) async throws -> String {
@@ -221,6 +225,7 @@ enum TranscriberError: LocalizedError {
     case notReady
     case noText
     case downloadFailed(String)
+    case modelInUse
 
     var errorDescription: String? {
         switch self {
@@ -228,6 +233,7 @@ enum TranscriberError: LocalizedError {
         case .notReady: return "语音识别模型尚未就绪"
         case .noText: return "未识别到语音内容"
         case .downloadFailed(let detail): return "模型文件下载失败: \(detail)"
+        case .modelInUse: return "语音会话运行中，无法删除模型"
         }
     }
 }

@@ -12,6 +12,11 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        // Passive clipboard sample: one value per keyboard appearance (no background
+        // monitoring possible). Requires Full Access; silently skips otherwise.
+        if hasFullAccess {
+            _ = ClipboardCapture.captureIfNeeded()
+        }
         Task { await viewModel.connect() }
     }
 
@@ -21,6 +26,9 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private func setupKeyboard() {
+        (view as? UIInputView)?.allowsSelfSizing = true
+        inputView?.allowsSelfSizing = true
+
         let keyboard = KeyboardView(
             model: viewModel,
             onInsert: { [weak self] text in
@@ -48,6 +56,9 @@ final class KeyboardViewController: UIInputViewController {
             host.view.topAnchor.constraint(equalTo: view.topAnchor),
             host.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
+        let heightConstraint = view.heightAnchor.constraint(equalToConstant: KeyboardLayout.contentHeight)
+        heightConstraint.priority = .required
+        heightConstraint.isActive = true
         host.didMove(toParent: self)
         self.host = host
     }
