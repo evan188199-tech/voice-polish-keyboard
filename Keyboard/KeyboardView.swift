@@ -18,6 +18,9 @@ struct KeyboardView: View {
     @State private var lastShiftTapAt: Date?
     private let shiftController = ShiftStateController()
 
+    private static let deleteKeyWidth: CGFloat = 52
+    private static let deleteKeyHeight: CGFloat = 46
+
     private static let quickSymbols: [(character: String, accessibilityLabel: String)] = [
         ("@", "at 符号"),
         ("#", "井号"),
@@ -30,9 +33,9 @@ struct KeyboardView: View {
     ]
 
     private static let numberPadRows: [[(character: String, accessibilityLabel: String)]] = [
-        [("1", "1"), ("2", "2"), ("3", "3")],
-        [("4", "4"), ("5", "5"), ("6", "6")],
-        [("7", "7"), ("8", "8"), ("9", "9")],
+        [("1", "1"), ("2", "2"), ("3", "3"), ("+", "加号")],
+        [("4", "4"), ("5", "5"), ("6", "6"), ("-", "减号")],
+        [("7", "7"), ("8", "8"), ("9", "9"), ("=", "等号")],
         [(".", "小数点"), ("0", "0"), (",", "逗号")]
     ]
 
@@ -43,8 +46,7 @@ struct KeyboardView: View {
     var body: some View {
         VStack(spacing: 4) {
             if page == .voice {
-                voiceToolbar
-                holdZone
+                voiceContent
             } else if page == .abc {
                 abcContent
             } else if page == .numbers {
@@ -74,7 +76,21 @@ struct KeyboardView: View {
         }
     }
 
-    // MARK: - Voice toolbar
+    // MARK: - Voice page
+
+    private var voiceContent: some View {
+        VStack(spacing: 4) {
+            voiceToolbar
+            ZStack(alignment: .bottomTrailing) {
+                holdZone
+                continuousDeleteButton
+                    .frame(width: Self.deleteKeyWidth, height: Self.deleteKeyHeight)
+                    .disabled(!model.isConnected || model.isRecording)
+                    .opacity(model.isRecording ? 0.35 : 1)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
 
     private var voiceToolbar: some View {
         HStack(spacing: 4) {
@@ -452,7 +468,8 @@ struct KeyboardView: View {
                 ForEach(Self.qwertyRowBottom, id: \.self) { letter in
                     letterKey(letter)
                 }
-                shiftKey()
+                continuousDeleteButton
+                    .frame(width: Self.deleteKeyWidth)
             }
             .frame(maxHeight: .infinity)
         }
@@ -542,18 +559,44 @@ struct KeyboardView: View {
 
     private var numberGrid: some View {
         VStack(spacing: 5) {
-            ForEach(Array(Self.numberPadRows.enumerated()), id: \.offset) { _, row in
-                HStack(spacing: 8) {
-                    ForEach(row, id: \.character) { key in
+            ForEach(0..<3, id: \.self) { rowIndex in
+                HStack(spacing: 6) {
+                    ForEach(0..<3, id: \.self) { colIndex in
+                        let item = Self.numberPadRows[rowIndex][colIndex]
                         characterKey(
-                            key.character,
-                            accessibilityLabel: key.accessibilityLabel,
-                            style: .number
+                            item.character,
+                            accessibilityLabel: item.accessibilityLabel,
+                            style: .number,
+                            fillsHeight: true
                         )
                     }
+                    let op = Self.numberPadRows[rowIndex][3]
+                    characterKey(
+                        op.character,
+                        accessibilityLabel: op.accessibilityLabel,
+                        style: .symbol,
+                        fillsHeight: true
+                    )
+                    .frame(width: Self.deleteKeyWidth)
                 }
+                .frame(maxHeight: .infinity)
             }
+            HStack(spacing: 6) {
+                ForEach(0..<3, id: \.self) { colIndex in
+                    let item = Self.numberPadRows[3][colIndex]
+                    characterKey(
+                        item.character,
+                        accessibilityLabel: item.accessibilityLabel,
+                        style: .number,
+                        fillsHeight: true
+                    )
+                }
+                continuousDeleteButton
+                    .frame(width: Self.deleteKeyWidth)
+            }
+            .frame(maxHeight: .infinity)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("数字键盘")
     }
@@ -570,13 +613,10 @@ struct KeyboardView: View {
             }
             .frame(maxWidth: .infinity)
 
-            continuousDeleteButton
-                .frame(width: 48)
-
             characterKey("换行", accessibilityLabel: "换行", style: .returnKey) {
                 requestAction(onReturn)
             }
-                .frame(width: 64)
+            .frame(width: 64)
         }
         .frame(height: 40)
     }
@@ -670,50 +710,58 @@ struct KeyboardView: View {
     // MARK: - Clipboard page
 
     private var clipboardContent: some View {
-        VStack(spacing: 4) {
-            HStack {
-                Text("剪切板历史")
-                    .font(.caption.weight(.semibold))
-                Spacer()
-                if !model.clipboardEntries.isEmpty {
-                    Button("清空", role: .destructive) {
-                        model.clearClipboard()
-                    }
-                    .font(.caption)
-                    .buttonStyle(.borderless)
-                    .disabled(model.isRecording)
-                }
-            }
-            .padding(.horizontal, 2)
-
-            if model.clipboardEntries.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "list.clipboard")
-                        .font(.system(size: 32, weight: .light))
-                        .foregroundStyle(.tertiary)
-                    Text("暂无剪切板记录")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.secondary)
-                    Text("复制文字后唤出键盘，会自动出现在这里")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .multilineTextAlignment(.center)
-                }
-                .padding(.vertical, 8)
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 3) {
-                        ForEach(model.clipboardEntries) { entry in
-                            clipboardRow(entry)
+        ZStack(alignment: .bottomTrailing) {
+            VStack(spacing: 4) {
+                HStack {
+                    Text("剪切板历史")
+                        .font(.caption.weight(.semibold))
+                    Spacer()
+                    if !model.clipboardEntries.isEmpty {
+                        Button("清空", role: .destructive) {
+                            model.clearClipboard()
                         }
+                        .font(.caption)
+                        .buttonStyle(.borderless)
+                        .disabled(model.isRecording)
                     }
-                    .padding(.horizontal, 2)
-                    .frame(maxWidth: .infinity)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .padding(.horizontal, 2)
+
+                if model.clipboardEntries.isEmpty {
+                    VStack(spacing: 8) {
+                        Image(systemName: "list.clipboard")
+                            .font(.system(size: 32, weight: .light))
+                            .foregroundStyle(.tertiary)
+                        Text("暂无剪切板记录")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        Text("复制文字后唤出键盘，会自动出现在这里")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 3) {
+                            ForEach(model.clipboardEntries) { entry in
+                                clipboardRow(entry)
+                            }
+                        }
+                        .padding(.horizontal, 2)
+                        .padding(.bottom, Self.deleteKeyHeight + 6)
+                        .frame(maxWidth: .infinity)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+
+            continuousDeleteButton
+                .frame(width: Self.deleteKeyWidth, height: Self.deleteKeyHeight)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func clipboardRow(_ entry: ClipboardEntry) -> some View {
