@@ -65,7 +65,6 @@ final class FixtureURLProtocol: URLProtocol, @unchecked Sendable {
 
         let correctionFixtures: [(String, String)] = [
             ("明天联系小明，小明是黄晓明的晓明。", "明天联系晓明。"),
-            ("发给张伟，伟是伟大的伟。", "发给张伟。"),
             ("聽日搵小明，小明係黃曉明嘅曉明。", "聽日搵曉明。"),
             ("明天联系李丽，李丽是王丽丽的丽丽。", "明天联系丽丽。"),
             ("不是明天，是后天交货。", "后天交货。")
@@ -75,7 +74,7 @@ final class FixtureURLProtocol: URLProtocol, @unchecked Sendable {
             check(result.body == expected && result.original == raw, "scoped spoken correction: \(raw.prefix(12))")
             check(SpokenCorrection.process(result.body, mode: .rewrite).body == result.body, "spoken correction is idempotent")
         }
-        for text in ["小明是黄晓明的晓明", "他解释说，小明是黄晓明的晓明", "明天联系小明和小明，小明是黄晓明的晓明", "他说‘小明是黄晓明的晓明’", "明天联系小明，小明不是黄晓明的晓明", "明天联系小明，小明是黄晓明的明", "不是所有任务都取消", "send /tmp/x to 小明，小明是黄晓明的晓明", "不要修改已插入的宿主"] {
+        for text in ["发给张伟，伟是伟大的伟。", "小明是黄晓明的晓明", "他解释说，小明是黄晓明的晓明", "明天联系小明和小明，小明是黄晓明的晓明", "他说‘小明是黄晓明的晓明’", "明天联系小明，小明不是黄晓明的晓明", "明天联系小明，小明是黄晓明的明", "不是所有任务都取消", "send /tmp/x to 小明，小明是黄晓明的晓明", "不要修改已插入的宿主"] {
             check(SpokenCorrection.process(text, mode: .rewrite).body == text, "ambiguous/quoted/negative/no-target correction is preserved")
         }
         let corrected = DictationTextPreparation("明天联系小明，小明是黄晓明的晓明。", mode: .rewrite)

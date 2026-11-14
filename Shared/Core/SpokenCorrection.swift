@@ -23,45 +23,12 @@ enum SpokenCorrection {
             return SpokenCorrectionResult(original: text, body: String(text[range]), correctedTerms: [], needsConfirmation: false)
         }
         guard !["不是", "唔係", "并非", "並非", "不要改", "唔好改"].contains(where: text.contains) else { return unchanged() }
-        // Two explicit edits are safe only as a direct chain against one
-        // occurrence. Any other repeated instruction remains unchanged.
-        let chained = try! NSRegularExpression(pattern: #"(?:^|[，,。；;]\s*)(?:把|将|將)([\p{Han}A-Za-z]{1,8})(?:改成|改为|改為|改做)([\p{Han}A-Za-z]{1,8})[，,；;]\s*(?:把|将|將)([\p{Han}A-Za-z]{1,8})(?:改成|改为|改為|改做)([\p{Han}A-Za-z]{1,8})[。.!！]?\s*$"#)
-        if let match = chained.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-           let a = Range(match.range(at: 1), in: text), let b = Range(match.range(at: 2), in: text),
-           let c = Range(match.range(at: 3), in: text), let d = Range(match.range(at: 4), in: text),
-           let clause = Range(match.range, in: text) {
-            let old = String(text[a]), intermediate = String(text[b]), next = String(text[c]), final = String(text[d])
-            let prefix = String(text[..<clause.lowerBound])
-            let targets = occurrences(of: old, in: prefix)
-            guard prefix.range(of: #"(?:把|将|將)[\p{Han}A-Za-z]{1,8}(?:改成|改为|改為|改做)"#, options: .regularExpression) == nil,
-                  intermediate == next, old != intermediate, occurrences(of: intermediate, in: prefix).isEmpty,
-                  targets.count == 1, let target = targets.first else { return unchanged(true) }
-            var body = prefix; body.replaceSubrange(target, with: final)
-            if text.hasSuffix("。") { body += "。" }
-            else if text.hasSuffix(".") { body += "." }
-            else if text.hasSuffix("！") { body += "！" }
-            else if text.hasSuffix("!") { body += "!" }
-            return SpokenCorrectionResult(original: text, body: body, correctedTerms: [final], needsConfirmation: false)
-        }
-        // An explicit trailing self-edit can affect only one occurrence in this
-        // still-undelivered segment. Ambiguous, quoted and negated input is kept.
-        let edit = try! NSRegularExpression(pattern: #"(?:^|[，,。；;]\s*)(?:把|将|將)([\p{Han}A-Za-z]{1,8})(?:改成|改为|改為|改做)([\p{Han}A-Za-z]{1,8})[。.!！]?\s*$"#)
-        if let match = edit.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-           let oldRange = Range(match.range(at: 1), in: text),
-           let replacementRange = Range(match.range(at: 2), in: text),
-           let clauseRange = Range(match.range, in: text) {
-            let old = String(text[oldRange]), replacement = String(text[replacementRange])
-            let prefix = String(text[..<clauseRange.lowerBound])
-            let targets = occurrences(of: old, in: prefix)
-            guard prefix.range(of: #"(?:把|将|將)[\p{Han}A-Za-z]{1,8}(?:改成|改为|改為|改做)"#, options: .regularExpression) == nil,
-                  targets.count == 1, let target = targets.first else { return unchanged(true) }
-            var body = prefix
-            body.replaceSubrange(target, with: replacement)
-            if text.hasSuffix("。") { body += "。" }
-            else if text.hasSuffix(".") { body += "." }
-            else if text.hasSuffix("！") { body += "！" }
-            else if text.hasSuffix("!") { body += "!" }
-            return SpokenCorrectionResult(original: text, body: body, correctedTerms: [replacement], needsConfirmation: false)
+        // A plain ASR transcript cannot establish which written characters a
+        // speaker intended, even when the recognized spellings differ. Do not
+        // silently execute oral edit commands: retain all words for review.
+        let spokenEdit = try! NSRegularExpression(pattern: #"(?:^|[，,。；;]\s*)(?:把|将|將)([\p{Han}A-Za-z]{1,8})(?:改成|改为|改為|改做)([\p{Han}A-Za-z]{1,8})[。.!！]?\s*$"#)
+        if spokenEdit.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil {
+            return unchanged(true)
         }
         // End-of-utterance explanation only. Replacement must be explicitly present
         // in its example word, and there must be exactly one preceding target.
@@ -73,7 +40,7 @@ enum SpokenCorrection {
               let clauseRange = Range(match.range, in: text)
         else { return unchanged() }
         let old = String(text[oldRange]), example = String(text[exampleRange]), replacement = String(text[newRange])
-        guard replacement.count == old.count, occurrences(of: replacement, in: example).count == 1 else { return unchanged(true) }
+        guard replacement != old, replacement.count == old.count, occurrences(of: replacement, in: example).count == 1 else { return unchanged(true) }
         let prefix = String(text[..<clauseRange.lowerBound])
         let targets = occurrences(of: old, in: prefix)
         guard targets.count == 1, let target = targets.first else { return unchanged(true) }
