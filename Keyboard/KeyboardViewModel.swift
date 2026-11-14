@@ -39,6 +39,10 @@ final class KeyboardViewModel: ObservableObject {
     private var visible = false
     @Published private(set) var appearance: UInt64 = 0
     private var submittedHere = Set<UUID>()
+    private weak var translationModel: TranslationViewModel?
+    private var activeTranslation: TranslationContext?
+    private var translationJobs: [UUID: UUID] = [:]
+    private var translationDeliveryPending: UUID?
     private var bufferedResults: [(UUID?, String, [PlaceNameSuggestion])] = []
     @Published private(set) var placeReview: PlaceReviewDraft?
     /// Called only for jobs committed in the current keyboard appearance.
@@ -107,6 +111,11 @@ final class KeyboardViewModel: ObservableObject {
         isConnected = false
         needsActivation = true
         submittedHere.removeAll()
+        if let context = activeTranslation { translationModel?.cancel(context.id) }
+        activeTranslation = nil
+        translationJobs.removeAll()
+        translationDeliveryPending = nil
+        translationModel?.onVoiceFinished = nil
         // Cancel live audio only. The server keeps all committed jobs.
         cleanup = Task {
             await previousCleanup?.value
@@ -123,6 +132,25 @@ final class KeyboardViewModel: ObservableObject {
             await finishRecording()
         } else {
             await startRecording()
+        }
+    }
+
+    func startTranslation(_ target: TranslationTarget, translation: TranslationViewModel) {
+        guard visible, isConnected, !needsActivation, !capture.isTransitioning, !capture.isRecording,
+              let context = translation.prepareVoice(target: target) else { return }
+        translationModel = translation
+        activeTranslation = context
+        translation.onVoiceFinished = { [weak self] id in
+            guard let self, self.translationDeliveryPending == id else { return }
+            self.translationDeliveryPending = nil
+            self.drainBufferedResults()
+        }
+        Task {
+            await startRecording()
+            if !capture.isRecording, activeTranslation?.id == context.id {
+                translation.cancel(context.id)
+                activeTranslation = nil
+            }
         }
     }
 
@@ -166,19 +194,28 @@ final class KeyboardViewModel: ObservableObject {
         stopTimer()
         statusText = "正在提交…"
         do {
-            let response = try await client.send(.finish)
+            let response = try await client.send(activeTranslation == nil ? .finish : .finishTranslation)
             guard visible, appearance == epoch else { return }
             capture.settle(recording: false)
             if let status = response.response.status { applyHostStatus(status) }
             switch response.response.outcome {
             case .ok:
-                if let id = response.response.jobID { submittedHere.insert(id) }
+                if let id = response.response.jobID {
+                    submittedHere.insert(id)
+                    if let context = activeTranslation { translationJobs[id] = context.id }
+                } else if let context = activeTranslation { translationModel?.cancel(context.id) }
+                activeTranslation = nil
                 statusText = readyPrompt
                 drainBufferedResults()
             case .text:
                 // Compatibility with an older bridge; this command is never replayed.
-                if let text = response.response.text { receiveResult(text, autoInsert: true) }
+                if let context = activeTranslation {
+                    translationModel?.cancel(context.id)
+                    activeTranslation = nil
+                    if let text = response.response.text { receiveResult(text, autoInsert: false) }
+                } else if let text = response.response.text { receiveResult(text, autoInsert: true) }
             case .error, .unauthorized:
+                if let context = activeTranslation { translationModel?.cancel(context.id); activeTranslation = nil }
                 statusText = response.response.message ?? "提交失败，可到主应用历史恢复"
                 canRetry = true
             }
@@ -190,12 +227,14 @@ final class KeyboardViewModel: ObservableObject {
             guard visible, appearance == epoch else { return }
             capture.settle(recording: false)
             connectionFailed()
+            if let context = activeTranslation { translationModel?.cancel(context.id); activeTranslation = nil }
             statusText = "连接中断 · 已提交结果可从历史恢复"
         }
     }
 
     func cancelRecording() async {
         guard capture.beginCancel() else { return }
+        if let context = activeTranslation { translationModel?.cancel(context.id); activeTranslation = nil }
         let epoch = appearance
         stopTimer()
         statusText = "正在取消本段…"
@@ -232,12 +271,20 @@ final class KeyboardViewModel: ObservableObject {
     }
 
     private func drainBufferedResults() {
-        guard !capture.isTransitioning, placeReview == nil else { return }
+        guard !capture.isTransitioning, placeReview == nil, translationDeliveryPending == nil else { return }
         let results = bufferedResults
         bufferedResults.removeAll()
         for (id, text, suggestions) in results {
-            if placeReview != nil {
+            if placeReview != nil || translationDeliveryPending != nil {
                 bufferedResults.append((id, text, suggestions))
+                continue
+            }
+            if let id, let contextID = translationJobs.removeValue(forKey: id) {
+                _ = submittedHere.remove(id)
+                if let translationModel {
+                    translationDeliveryPending = contextID
+                    translationModel.receiveVoiceSource(text, contextID: contextID)
+                } else { receiveResult(text, autoInsert: false) }
                 continue
             }
             let autoInsert = id.map { submittedHere.remove($0) != nil } ?? false

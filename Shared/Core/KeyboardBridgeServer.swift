@@ -52,6 +52,18 @@ actor KeyboardBridgeServer {
         }
 
         switch message.command {
+        case .translation:
+            guard let payload = message.translationPayload else {
+                BridgeServer.send(response: WireResponse(requestID: message.requestID, response: .error("翻译请求无效")), over: connection)
+                return
+            }
+            let targets = await TranslationPreferences.shared.targets
+            let reply = await TranslationBridgeHandler(service: DisabledTranslationService()).handle(payload, targets: targets)
+            guard let encoded = try? JSONEncoder().encode(reply), let text = String(data: encoded, encoding: .utf8) else {
+                BridgeServer.send(response: WireResponse(requestID: message.requestID, response: .error("翻译响应无效")), over: connection)
+                return
+            }
+            BridgeServer.send(response: WireResponse(requestID: message.requestID, response: .text(text)), over: connection)
         case .ping:
             let status = await coordinator.currentStatus
             BridgeServer.send(
@@ -128,9 +140,9 @@ actor KeyboardBridgeServer {
                     )
                 }
             }
-        case .finish:
+        case .finish, .finishTranslation:
             // Enqueue only; do not wait for ASR / polish.
-            let jobID = await coordinator.finishRecordingAndEnqueue()
+            let jobID = await coordinator.finishRecordingAndEnqueue(translation: message.command == .finishTranslation)
             let status = await coordinator.currentStatus
             if let jobID {
                 BridgeServer.send(

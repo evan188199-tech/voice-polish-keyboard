@@ -289,3 +289,24 @@ for (code, expected) in [(URLError.Code.notConnectedToInternet, TranslationFailu
 TranslationURLProtocol.networkFailure = nil
 mockSession.invalidateAndCancel()
 print("Translation checkpoint completed: logic/mock only; no iOS build, ASR, live translation or host insertion test.")
+
+// Bridge handler remains disabled by default and never calls a provider implicitly.
+let disabledBridge = TranslationBridgeHandler(service: DisabledTranslationService())
+let unavailableReply = await disabledBridge.handle(TranslationBridgePayload(operation: .capabilities), targets: [.english])
+check(unavailableReply.capability?.isAvailable == false, "bridge reports disabled production service")
+let deniedRequest = TranslationRequest(context: context(), source: "保留原文")
+let deniedReply = await disabledBridge.handle(TranslationBridgePayload(operation: .translateText, request: deniedRequest), targets: [.english])
+check(deniedReply.event == nil && deniedReply.failure == .unavailable, "disabled bridge rejects and never pretends original is translated")
+let malformedReply = await disabledBridge.handle(TranslationBridgePayload(operation: .translateText), targets: [.english])
+check(malformedReply.failure == .invalidResult, "bridge rejects missing request")
+
+actor ImmediateBridgeTranslator: TextTranslating {
+    var capability: TranslationCapability { get async { fixtureCapability() } }
+    func translate(_ request: TranslationRequest) async throws -> TranslationEvent {
+        TranslationEvent(context: request.context, source: request.source, translation: "Hello.", failure: nil)
+    }
+}
+let bridgeMock = TranslationBridgeHandler(service: ImmediateBridgeTranslator())
+let mockReply = await bridgeMock.handle(TranslationBridgePayload(operation: .translateText, request: deniedRequest), targets: [.english])
+check(mockReply.event?.translation == "Hello." && mockReply.event?.source == deniedRequest.source,
+      "bridge mock preserves request identity and returns translated text")

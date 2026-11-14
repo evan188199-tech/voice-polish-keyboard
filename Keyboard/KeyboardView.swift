@@ -3,6 +3,7 @@ import UIKit
 
 struct KeyboardView: View {
     @ObservedObject var model: KeyboardViewModel
+    @ObservedObject var translation: TranslationViewModel
     let onInsert: (String) -> Void
     let onDelete: () -> Void
     let onReturn: () -> Void
@@ -10,6 +11,7 @@ struct KeyboardView: View {
     let onNextKeyboard: () -> Void
 
     @State private var page: KeyboardPage = .voice
+    @State private var translationTracking = false
     @State private var shiftState: ShiftState = .off
     @State private var lastShiftTapAt: Date?
     private let shiftController = ShiftStateController()
@@ -58,7 +60,7 @@ struct KeyboardView: View {
         .frame(maxWidth: .infinity)
         .frame(height: KeyboardLayout.contentHeight)
         .background(Color(uiColor: .systemGroupedBackground))
-        .highPriorityGesture(pageSwipe, including: model.canSwitchPage ? .all : .none)
+        .simultaneousGesture(pageSwipe, including: model.canSwitchPage && !translationTracking ? .all : .none)
         .onChange(of: model.appearance) { _, _ in page = .voice }
         .onChange(of: model.isRecording) { _, isRecording in
             // Keep the user on the voice page while a hold-to-record gesture is active.
@@ -80,7 +82,11 @@ struct KeyboardView: View {
         VStack(spacing: 0) {
             voiceToolbar
             Spacer(minLength: 4)
-            if let review = model.placeReview, model.canSwitchPage {
+            if translation.showPreview && model.canSwitchPage {
+                TranslationPreviewView(model: translation, onEditSource: { translation.isEditingSource = true; page = .abc },
+                    onPasteSource: { if let value = UIPasteboard.general.string { translation.appendSource(value) } },
+                    onClose: { translation.showPreview = false; translation.isEditingSource = false })
+            } else if let review = model.placeReview, model.canSwitchPage {
                 placeReviewContent(review)
             } else {
             HStack(spacing: 20) {
@@ -207,6 +213,7 @@ struct KeyboardView: View {
                     }.disabled(model.askFollowUpArmed)
                     Button("新问答") { Task { await model.clearAskConversation() } }
                 }
+                Button("翻译与原文恢复") { translation.showPreview = true }
                 Button("打开主应用") { onActivateSession() }
             } label: {
                 Image(systemName: "ellipsis")
@@ -220,36 +227,17 @@ struct KeyboardView: View {
     }
 
     private var microphoneButton: some View {
-        Button {
-            if model.needsActivation || !model.isConnected {
-                onActivateSession()
-            } else {
-                Task { await model.toggleRecording() }
-            }
-        } label: {
-            ZStack {
-                Circle()
-                    .fill(model.needsActivation ? Color.clear : Color.primary)
-                Circle()
-                    .strokeBorder(Color.primary.opacity(model.isRecording ? 0.16 : 0.8), lineWidth: model.isRecording ? 7 : 1.5)
-                    .padding(model.isRecording ? -7 : 0)
-                if model.capture.isTransitioning || model.isConnecting {
-                    ProgressView().tint(model.needsActivation ? Color.primary : Color(uiColor: .systemBackground))
-                } else {
-                    // SF Symbols are system assets; no reference product resources are bundled.
-                    Image(systemName: model.isRecording ? "waveform" : (model.needsActivation ? "mic" : "mic.fill"))
-                        .font(.system(size: 30, weight: .medium))
-                        .foregroundStyle(model.needsActivation ? Color.primary : Color(uiColor: .systemBackground))
-                }
-            }
-            .frame(width: 76, height: 76)
-            .contentShape(Circle())
-        }
-        .buttonStyle(KeyboardPressButtonStyle())
-        .disabled(model.capture.isTransitioning || model.isConnecting)
-        .accessibilityLabel(model.isRecording ? "完成录音并插入文字" : (model.needsActivation ? "打开主应用准备录音" : "开始录音"))
-        .accessibilityHint("点击开始，再次点击完成；不会自动发送消息")
-        .accessibilityIdentifier("voice.microphone")
+        TranslationSpeakControl(targets: translation.capability.orderedTargets,
+            canTranslate: translation.capability.isAvailable && model.isConnected && !model.needsActivation,
+            isRecording: model.isRecording, isBusy: model.capture.isTransitioning || model.isConnecting,
+            needsActivation: model.needsActivation,
+            onTap: {
+                if model.needsActivation || !model.isConnected { onActivateSession() }
+                else { Task { await model.toggleRecording() } }
+            },
+            onTranslate: { target in model.startTranslation(target, translation: translation) },
+            onTracking: { translationTracking = $0 })
+            .accessibilityIdentifier("voice.microphone")
     }
 
     private var readinessLabel: String {
@@ -269,7 +257,7 @@ struct KeyboardView: View {
     private var pageSwipe: some Gesture {
         DragGesture(minimumDistance: 24)
             .onEnded { value in
-                guard VoiceKeyboardSwipe.shouldSwitch(
+                guard !translationTracking, VoiceKeyboardSwipe.shouldSwitch(
                     horizontal: Double(value.translation.width), vertical: Double(value.translation.height),
                     capture: model.capture
                 ) else { return }
@@ -457,7 +445,7 @@ struct KeyboardView: View {
                 }
             }
             characterKey("回车", accessibilityLabel: "回车，遵循当前应用行为", style: .returnKey) {
-                requestAction(onReturn)
+                if translation.isEditingSource { requestInsertion("\n") } else { requestAction(onReturn) }
             }
             .frame(width: 64)
         }
@@ -503,7 +491,7 @@ struct KeyboardView: View {
     }
 
     private var continuousDeleteButton: some View {
-        ContinuousDeleteKey { requestAction(onDelete) }
+        ContinuousDeleteKey { if translation.isEditingSource { translation.deleteSourceBackward() } else { requestAction(onDelete) } }
     }
 
     // MARK: - Shared key chrome
@@ -541,7 +529,7 @@ struct KeyboardView: View {
     }
 
     private func requestInsertion(_ text: String) {
-        requestAction { onInsert(text) }
+        if translation.isEditingSource { translation.appendSource(text) } else { requestAction { onInsert(text) } }
     }
 
     private func requestAction(_ action: @escaping () -> Void) {

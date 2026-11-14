@@ -104,6 +104,12 @@ struct TranslationBridgePayload: Codable, Sendable {
     }
 }
 
+struct TranslationBridgeReply: Codable, Sendable {
+    let capability: TranslationCapability?
+    let event: TranslationEvent?
+    let failure: TranslationFailure?
+}
+
 /// A single editable text request. Voice jobs have independent immutable contexts and
 /// retain their global job order; changing a later target never rewrites an earlier job.
 struct TranslationDraft: Codable, Equatable, Sendable {

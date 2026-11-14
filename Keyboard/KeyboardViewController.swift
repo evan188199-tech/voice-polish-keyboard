@@ -4,6 +4,9 @@ import SwiftUI
 final class KeyboardViewController: UIInputViewController {
     private var host: UIHostingController<KeyboardView>?
     private let viewModel = KeyboardViewModel()
+    private let translationModel = TranslationViewModel(service: BridgeTranslationService())
+    private var translationAppearanceTask: Task<Void, Never>?
+    private var translationVisible = false
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -18,6 +21,16 @@ final class KeyboardViewController: UIInputViewController {
             _ = ClipboardCapture.captureIfNeeded()
         }
         viewModel.appear()
+        translationVisible = true
+        translationModel.onInsert = { [weak self] text in
+            guard let self, self.view.window != nil else { return }
+            self.textDocumentProxy.insertText(text)
+        }
+        translationAppearanceTask?.cancel()
+        translationAppearanceTask = Task { [weak self] in
+            guard let self, !Task.isCancelled, self.translationVisible else { return }
+            await self.translationModel.appear(hasFullAccess: self.hasFullAccess, hostSessionID: UUID())
+        }
         viewModel.onTextReady = { [weak self] text in
             guard let self, self.view.window != nil else { return }
             self.textDocumentProxy.insertText(text)
@@ -27,6 +40,10 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        translationVisible = false
+        translationAppearanceTask?.cancel()
+        translationAppearanceTask = nil
+        translationModel.disappear()
         viewModel.onTextReady = nil
         viewModel.disconnect()
     }
@@ -37,6 +54,7 @@ final class KeyboardViewController: UIInputViewController {
 
         let keyboard = KeyboardView(
             model: viewModel,
+            translation: translationModel,
             onInsert: { [weak self] text in
                 self?.textDocumentProxy.insertText(text)
             },

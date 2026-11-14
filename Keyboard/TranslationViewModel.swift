@@ -17,6 +17,7 @@ import Combine
     }
     @Published private(set) var message = "翻译尚未连接"
     var onInsert: ((String) -> Void)?
+    var onVoiceFinished: ((UUID) -> Void)?
     private let service: any TextTranslating
     private let defaults: UserDefaults
     private let timeoutNanoseconds: UInt64
@@ -106,14 +107,15 @@ import Combine
     func receiveVoiceSource(_ source: String, contextID: UUID) {
         guard isVisible, let context = voiceContexts.removeValue(forKey: contextID), !cancelled.contains(contextID) else { return }
         guard !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            retain(TranslationEvent(context: context, source: source, translation: nil, failure: .emptySource)); return
+            retain(TranslationEvent(context: context, source: source, translation: nil, failure: .emptySource)); onVoiceFinished?(contextID); return
         }
         guard source.utf8.count <= TranslationRequest.maxSourceUTF8Bytes else {
-            retain(TranslationEvent(context: context, source: source, translation: nil, failure: .inputTooLong)); return
+            retain(TranslationEvent(context: context, source: source, translation: nil, failure: .inputTooLong)); onVoiceFinished?(contextID); return
         }
         enqueue(TranslationRequest(context: context, source: source))
     }
     func cancel(_ id: UUID) {
+        let voice = voiceContexts[id] != nil || currentRequest?.context.id == id && currentRequest?.context.sourceKind == .voice || queue.contains { $0.context.id == id && $0.context.sourceKind == .voice }
         if let request = currentRequest?.context.id == id ? currentRequest : queue.first(where: { $0.context.id == id }) {
             retain(TranslationEvent(context: request.context, source: request.source, translation: nil, failure: .cancelled))
         }
@@ -124,6 +126,7 @@ import Combine
         pendingCount = queue.count + (currentID == nil ? 0 : 1)
         Task { await service.cancel(id) }
         message = TranslationFailure.cancelled.message
+        if voice { onVoiceFinished?(id) }
     }
     func cancelDraft() { if let id = draft.requestID { cancel(id) } else { draft.cancel() }; persistDraft() }
     func insertPreview() {
@@ -182,6 +185,7 @@ import Combine
                     self.onInsert?(text)
                     self.message = "已尝试插入译文草稿，不会自动发送"
                 }
+                if request.context.sourceKind == .voice { self.onVoiceFinished?(id) }
             }
         }
     }

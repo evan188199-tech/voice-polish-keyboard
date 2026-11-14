@@ -107,6 +107,7 @@ final class VoiceSessionCoordinator: ObservableObject {
         let pcmData: Data
         let snapshot: JobSnapshot
         let generation: UInt64
+        let isTranslation: Bool
 
         var phase: VoiceJobPhase = .queuedASR
         var originalText: String?
@@ -127,6 +128,7 @@ final class VoiceSessionCoordinator: ObservableObject {
             pcmData: Data,
             snapshot: JobSnapshot,
             generation: UInt64,
+            isTranslation: Bool,
             recordingDurationMs: Int
         ) {
             self.id = id
@@ -134,6 +136,7 @@ final class VoiceSessionCoordinator: ObservableObject {
             self.pcmData = pcmData
             self.snapshot = snapshot
             self.generation = generation
+            self.isTranslation = isTranslation
             self.recordingDurationMs = recordingDurationMs
         }
     }
@@ -489,7 +492,7 @@ final class VoiceSessionCoordinator: ObservableObject {
 
     /// Capture audio, enqueue async processing, and free the mic immediately.
     @discardableResult
-    func finishRecordingAndEnqueue() async -> UUID? {
+    func finishRecordingAndEnqueue(translation: Bool = false) async -> UUID? {
         guard state == .recording, !isFinalizingCapture else { return nil }
         isFinalizingCapture = true
         captureEpoch &+= 1
@@ -498,7 +501,7 @@ final class VoiceSessionCoordinator: ObservableObject {
         elapsedSeconds = nil
         inputLevel = 0
 
-        guard let snapshot = makeSnapshot() else {
+        guard let snapshot = makeSnapshot(translation: translation) else {
             isFinalizingCapture = false
             state = .error
             statusMessage = "主应用设置不可用"
@@ -522,6 +525,7 @@ final class VoiceSessionCoordinator: ObservableObject {
             pcmData: data,
             snapshot: snapshot,
             generation: pipelineGeneration,
+            isTranslation: translation,
             recordingDurationMs: recordingDurationMs
         )
         jobs[jobID] = job
@@ -629,7 +633,7 @@ final class VoiceSessionCoordinator: ObservableObject {
     func takeBridgeOutcome(jobID: UUID?) -> (jobID: UUID?, outcome: JobOutcome?, placeSuggestions: [PlaceNameSuggestion]) {
         let identity = jobID ?? jobAtDeliveryCursor()?.id
         var suggestions: [PlaceNameSuggestion] = []
-        if let identity, let job = jobs[identity], job.phase == .ready,
+        if let identity, let job = jobs[identity], job.phase == .ready, !job.isTranslation,
            job.snapshot.polishMode != .coding, job.snapshot.polishMode != .askLLM {
             suggestions = PlaceNameMatcher.suggestions(in: job.finalText ?? "", entries: PlaceNameDictionaryStore.shared.entries,
                                                        script: job.snapshot.chineseScript)
@@ -831,10 +835,10 @@ final class VoiceSessionCoordinator: ObservableObject {
         return job.generation != pipelineGeneration
     }
 
-    private func makeSnapshot() -> JobSnapshot? {
+    private func makeSnapshot(translation: Bool = false) -> JobSnapshot? {
         guard let settings else { return nil }
         var history: [AskConversationTurn] = []
-        if settings.polishEnabled, settings.polishMode == .askLLM {
+        if !translation, settings.polishEnabled, settings.polishMode == .askLLM {
             if askFollowUpArmed, !askConversation.isEmpty {
                 history = askConversation
                 // Consume the arm so a later non-follow-up recording starts fresh.
@@ -846,8 +850,8 @@ final class VoiceSessionCoordinator: ObservableObject {
         }
         return JobSnapshot(
             vocabulary: settings.customVocabulary,
-            polishEnabled: settings.polishEnabled,
-            polishMode: settings.polishMode,
+            polishEnabled: translation ? false : settings.polishEnabled,
+            polishMode: translation ? .correctOnly : settings.polishMode,
             baseURL: settings.baseURL,
             modelName: settings.modelName,
             apiKey: settings.apiKey ?? "",
@@ -1134,6 +1138,12 @@ final class VoiceSessionCoordinator: ObservableObject {
             // Do not re-process the joined transcript here, or single-letter
             // segments separated by a pause would collapse across that boundary.
             job.originalText = await transcriber.lastRawTranscript ?? raw
+            if job.isTranslation {
+                job.localText = raw
+                lastTranscription = raw
+                completeJob(job, finalText: raw, polished: nil, polishFailed: false)
+                return
+            }
             let scripted = applyScript(raw, job.snapshot.chineseScript)
             let preparation = DictationTextPreparation(scripted, mode: job.snapshot.polishMode)
             job.preparedText = preparation

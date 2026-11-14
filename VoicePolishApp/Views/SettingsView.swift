@@ -67,6 +67,11 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section("翻译") {
+                    NavigationLink("翻译目标语言与服务") {
+                        TranslationSettingsView(serviceID: nil, serviceLabel: "当前没有启用的翻译服务")
+                    }
+                }
                 Section("繁简输出") {
                     Picker("输出字体", selection: $settings.chineseScript) {
                         ForEach(ChineseScriptPreference.allCases, id: \.self) { pref in

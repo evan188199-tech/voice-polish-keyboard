@@ -4,8 +4,10 @@ enum BridgeCommand: String, Codable, Sendable {
     case ping
     case start
     case finish
+    case finishTranslation
     case cancel
     case status
+    case translation
     /// Toggle optional polish API on the companion/main app.
     case setPolishEnabled
     /// Set polish mode raw value (`correctOnly` / `coding` / `rewrite` / `askLLM`).
@@ -202,6 +204,7 @@ struct WireMessage: Codable, Sendable {
     let chineseScript: String?
     /// Payload for `syncClipboardHistory` (keyboard-authoritative snapshot).
     let clipboardEntries: [ClipboardEntry]?
+    let translationPayload: TranslationBridgePayload?
 
     init(
         command: BridgeCommand,
@@ -211,7 +214,8 @@ struct WireMessage: Codable, Sendable {
         polishMode: String? = nil,
         jobID: UUID? = nil,
         chineseScript: String? = nil,
-        clipboardEntries: [ClipboardEntry]? = nil
+        clipboardEntries: [ClipboardEntry]? = nil,
+        translationPayload: TranslationBridgePayload? = nil
     ) {
         self.protocolVersion = AppConstants.protocolVersion
         self.requestID = requestID
@@ -222,6 +226,7 @@ struct WireMessage: Codable, Sendable {
         self.jobID = jobID
         self.chineseScript = chineseScript
         self.clipboardEntries = clipboardEntries
+        self.translationPayload = translationPayload
     }
 }
 

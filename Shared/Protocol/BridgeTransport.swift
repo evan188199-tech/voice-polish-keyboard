@@ -138,7 +138,9 @@ actor BridgeClient {
         polishMode: String? = nil,
         chineseScript: String? = nil,
         jobID: UUID? = nil,
-        clipboardEntries: [ClipboardEntry]? = nil
+        clipboardEntries: [ClipboardEntry]? = nil,
+        translationPayload: TranslationBridgePayload? = nil,
+        timeoutSeconds: Double = 4
     ) async throws -> WireResponse {
         await acquireRequestSlot()
         defer { releaseRequestSlot() }
@@ -155,14 +157,15 @@ actor BridgeClient {
             polishMode: polishMode,
             jobID: jobID,
             chineseScript: chineseScript,
-            clipboardEntries: clipboardEntries
+            clipboardEntries: clipboardEntries,
+            translationPayload: translationPayload
         )
         let data = try BridgeFrame.encode(message)
 
         // A suspended companion may keep TCP open without replying. Bound the
         // request so a lost start acknowledgement cannot lock the keyboard forever.
         let timeout = DispatchWorkItem { connection.cancel() }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 4, execute: timeout)
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeoutSeconds, execute: timeout)
         defer { timeout.cancel() }
 
         do {
