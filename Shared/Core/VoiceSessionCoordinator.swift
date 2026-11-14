@@ -1,9 +1,11 @@
 import Foundation
 import Combine
 import AVFoundation
+import OSLog
 
 @MainActor
 final class VoiceSessionCoordinator: ObservableObject {
+    private let deliveryLogger = Logger(subsystem: "com.voicepolish.app", category: "delivery")
     @Published private(set) var state: BridgeStatus.State = .inactive
     @Published private(set) var elapsedSeconds: TimeInterval?
     @Published private(set) var statusMessage: String?
@@ -71,6 +73,7 @@ final class VoiceSessionCoordinator: ObservableObject {
     private var polishInFlight = 0
     /// Retains auto-skipped / pruned terminal outcomes until the owner polls once.
     private var retainedOutcomes: [UUID: JobOutcome] = [:]
+    private var unreportedFailures = OrderedFailureIDs()
 
     // MARK: - Ask-mode multi-turn follow-up
     private var askConversation: [AskConversationTurn] = []
@@ -631,7 +634,7 @@ final class VoiceSessionCoordinator: ObservableObject {
 
     /// Identity and consumption must happen in one MainActor turn, even with multiple clients.
     func takeBridgeOutcome(jobID: UUID?) -> (jobID: UUID?, outcome: JobOutcome?, placeSuggestions: [PlaceNameSuggestion]) {
-        let identity = jobID ?? jobAtDeliveryCursor()?.id
+        let identity = jobID ?? unreportedFailures.first ?? jobAtDeliveryCursor()?.id
         var suggestions: [PlaceNameSuggestion] = []
         if let identity, let job = jobs[identity], job.phase == .ready, !job.isTranslation,
            job.snapshot.polishMode != .coding, job.snapshot.polishMode != .askLLM {
@@ -644,7 +647,10 @@ final class VoiceSessionCoordinator: ObservableObject {
     /// Consume a deliverable job result. `jobID == nil` returns the oldest deliverable job.
     func takeJobOutcome(jobID: UUID?) -> JobOutcome? {
         if let jobID {
+            guard unreportedFailures.allows(jobID) else { return .pending }
             if let retained = retainedOutcomes.removeValue(forKey: jobID) {
+                unreportedFailures.remove(jobID)
+                if case .failed = retained { deliveryLogger.notice("voice job failure reported") }
                 return retained
             }
             guard let job = jobs[jobID] else { return nil }
@@ -658,6 +664,8 @@ final class VoiceSessionCoordinator: ObservableObject {
             return consumeIfTerminal(job)
         }
 
+        // Report auto-skipped failures before delivering later successful jobs.
+        if let id = unreportedFailures.first { return takeJobOutcome(jobID: id) }
         // Legacy: oldest undelivered terminal job at the delivery cursor.
         while let job = jobAtDeliveryCursor() {
             if let outcome = consumeIfTerminal(job) {
@@ -766,6 +774,7 @@ final class VoiceSessionCoordinator: ObservableObject {
 
     private func retainOutcome(_ outcome: JobOutcome, for jobID: UUID) {
         retainedOutcomes[jobID] = outcome
+        if case .failed = outcome { unreportedFailures.append(jobID) }
     }
 
     private func jobAtDeliveryCursor() -> VoiceJob? {
@@ -791,6 +800,7 @@ final class VoiceSessionCoordinator: ObservableObject {
         polishInFlight = 0
         asrWorkerRunning = false
         retainedOutcomes.removeAll()
+        unreportedFailures.removeAll()
         nextSequence = 1
         deliveryCursor.reset()
         updatePendingCount()
@@ -811,6 +821,7 @@ final class VoiceSessionCoordinator: ObservableObject {
         for id in staleIDs {
             retainedOutcomes[id] = .discarded
         }
+        unreportedFailures.removeAll()
 
         jobs.removeAll()
         jobOrder.removeAll()

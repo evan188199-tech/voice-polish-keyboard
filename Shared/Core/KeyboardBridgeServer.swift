@@ -189,7 +189,7 @@ actor KeyboardBridgeServer {
                     BridgeServer.send(
                         response: WireResponse(
                             requestID: message.requestID,
-                            response: .error(failureMessage, status: status, code: .unknown, jobID: requestedJobID)
+                            response: .error(failureMessage, status: status, code: .unknown, jobID: delivery.jobID)
                         ),
                         over: connection
                     )

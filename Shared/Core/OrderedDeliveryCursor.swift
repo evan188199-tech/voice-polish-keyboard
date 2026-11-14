@@ -1,5 +1,15 @@
 import Foundation
 
+/// IDs of failures skipped by the processing cursor but not yet reported.
+struct OrderedFailureIDs {
+    private(set) var ids: [UUID] = []
+    var first: UUID? { ids.first }
+    func allows(_ id: UUID) -> Bool { first == nil || first == id }
+    mutating func append(_ id: UUID) { if !ids.contains(id) { ids.append(id) } }
+    mutating func remove(_ id: UUID) { ids.removeAll { $0 == id } }
+    mutating func removeAll() { ids.removeAll() }
+}
+
 /// Tracks the next sequence number that may be delivered to clients.
 /// Cloud jobs may finish out of order; insertion stays strictly sequential
 /// within a single pipeline generation.

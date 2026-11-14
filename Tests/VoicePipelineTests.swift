@@ -2,6 +2,22 @@ import XCTest
 @testable import VoicePolishApp
 
 final class VoicePipelineTests: XCTestCase {
+    func testSkippedFailuresRetainOrderAndCanBeConsumedOnce() {
+        var queue = OrderedFailureIDs()
+        let first = UUID(), second = UUID()
+        queue.append(first); queue.append(second); queue.append(first)
+        XCTAssertEqual(queue.ids, [first, second])
+        XCTAssertTrue(queue.allows(first))
+        XCTAssertFalse(queue.allows(second))
+        XCTAssertFalse(queue.allows(UUID()))
+        queue.remove(first)
+        XCTAssertEqual(queue.first, second)
+        XCTAssertTrue(queue.allows(second))
+        queue.remove(first)
+        XCTAssertEqual(queue.ids, [second])
+        queue.remove(second)
+        XCTAssertNil(queue.first)
+    }
     func testPipelineJobKeepsOnlySafeMetadata() throws {
         let job = VoicePipelineJob(
             id: UUID(),
