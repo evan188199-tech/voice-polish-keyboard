@@ -22,6 +22,17 @@ actor PendingNotionTransport: NotionQueryTransport {
     func isPending() -> Bool { pending != nil }
     func resolve(_ response: NotionQueryResponse) { pending?.resume(returning: response); pending = nil }
 }
+actor FictionalMetadataTransport: NotionMetadataTransport {
+    let response: NotionQueryResponse
+    init(_ response: NotionQueryResponse) { self.response = response }
+    func metadata(sourceID: UUID) async throws -> NotionQueryResponse { response }
+}
+actor PendingMetadataTransport: NotionMetadataTransport {
+    private var pending: CheckedContinuation<NotionQueryResponse, Error>?
+    func metadata(sourceID: UUID) async throws -> NotionQueryResponse { try await withCheckedThrowingContinuation { pending = $0 } }
+    func isPending() -> Bool { pending != nil }
+    func resolve(_ response: NotionQueryResponse) { pending?.resume(returning: response); pending = nil }
+}
 actor FictionalDelay {
     var delays: [TimeInterval] = []
     func record(_ value: TimeInterval) { delays.append(value) }
@@ -120,23 +131,58 @@ actor FictionalDelay {
               "Notion request pins API version and field filter")
         do { _ = try NotionHTTPTransport.request(request, credential: "bad\nfixture"); check(false, "invalid token must fail") }
         catch { check(true, "credential header injection is rejected") }
+        let metadataJSON: [String: Any] = ["object": "data_source", "id": source.uuidString,
+            "properties": ["Chosen": ["id": "fixture-prop", "type": "title"],
+                           "Number": ["id": "fixture-number", "type": "number"]]]
+        let metadataResponse = NotionQueryResponse(status: 200, retryAfter: nil, body: try! JSONSerialization.data(withJSONObject: metadataJSON))
+        let metadataReader = NotionSourceMetadataReader(transport: FictionalMetadataTransport(metadataResponse))
+        let metadataFields = try! await metadataReader.fields(sourceID: source)
+        check(metadataFields.count == 1 && metadataFields[0].id == "fixture-prop", "metadata selects only supported field types")
+        let wrongMetadata = NotionQueryResponse(status: 200, retryAfter: nil, body: try! JSONSerialization.data(withJSONObject: ["object": "data_source", "id": UUID().uuidString, "properties": [:]]))
+        do { _ = try await NotionSourceMetadataReader(transport: FictionalMetadataTransport(wrongMetadata)).fields(sourceID: source); check(false, "wrong source metadata must fail") }
+        catch { check(true, "metadata response is bound to requested source") }
+        let duplicateMetadata = NotionQueryResponse(status: 200, retryAfter: nil, body: try! JSONSerialization.data(withJSONObject: ["object": "data_source", "id": source.uuidString, "properties": ["A": ["id": "same", "type": "title"], "B": ["id": "same", "type": "rich_text"]]]))
+        do { _ = try await NotionSourceMetadataReader(transport: FictionalMetadataTransport(duplicateMetadata)).fields(sourceID: source); check(false, "duplicate field identity must fail") }
+        catch { check(true, "ambiguous duplicate property identifiers are rejected") }
+        let metadataGet = try! NotionHTTPTransport.metadataRequest(sourceID: source, credential: "fictional-token")
+        check(metadataGet.httpMethod == "GET" && metadataGet.url?.host == "api.notion.com" && metadataGet.url?.path == "/v1/data_sources/" + source.uuidString.lowercased(), "metadata request is fixed to the documented read-only endpoint")
+        let paginatedMetadata = NotionQueryResponse(status: 200, retryAfter: nil, body: try! JSONSerialization.data(withJSONObject: ["object": "data_source", "id": source.uuidString, "properties": [:], "has_more": true]))
+        do { _ = try await NotionSourceMetadataReader(transport: FictionalMetadataTransport(paginatedMetadata)).fields(sourceID: source); check(false, "incomplete metadata must fail") }
+        catch { check(true, "unexpected metadata pagination cannot silently truncate fields") }
+        let deniedMetadata = NotionQueryResponse(status: 403, retryAfter: nil, body: Data())
+        do { _ = try await NotionSourceMetadataReader(transport: FictionalMetadataTransport(deniedMetadata)).fields(sourceID: source); check(false, "denied metadata must fail") }
+        catch { check((error as? NotionPreviewError) == .permission, "revoked metadata access is reported as permission failure") }
         let flowSession = PrivateMaterialSession()
         await flowSession.useDemo("flow-fixture")
-        let flow = NotionImportFlow(reader: NotionPrivatePreviewReader(transport: FictionalNotionTransport([second])))
-        flow.sourceID = source.uuidString; flow.propertyID = "fixture-prop"; flow.propertyName = "Chosen"; flow.kind = .privateRoute
+        let flow = NotionImportFlow(reader: NotionPrivatePreviewReader(transport: FictionalNotionTransport([second])), metadata: metadataReader)
+        flow.sourceID = source.uuidString; await flow.discover(session: flowSession); flow.selectedFieldID = "fixture-prop"; flow.kind = .privateRoute
         let flowPreview = await flow.fetch(session: flowSession)
         check(flowPreview?.candidates.count == 1 && flowSession.privateTerms.isEmpty, "configured UI flow previews without importing")
         if let flowPreview {
             try! flowSession.confirmImport(flowPreview, selected: [flowPreview.candidates[0].id], expectedAccount: "flow-fixture", reviewed: true)
         }
         check(flowSession.privateTerms.count == 1, "explicit reviewed UI flow imports selected fictional item")
+        let delayedMetadata = PendingMetadataTransport()
+        let discoveryFlow = NotionImportFlow(metadata: NotionSourceMetadataReader(transport: delayedMetadata))
+        discoveryFlow.sourceID = source.uuidString
+        let discovery = Task { await discoveryFlow.discover(session: flowSession) }
+        while !(await delayedMetadata.isPending()) { await Task.yield() }
+        discoveryFlow.sourceID = UUID().uuidString
+        await delayedMetadata.resolve(metadataResponse)
+        await discovery.value
+        check(discoveryFlow.fields.isEmpty && !discoveryFlow.busy, "source switch discards late metadata and selection")
+        let revokeFlow = NotionImportFlow(metadata: NotionSourceMetadataReader(transport: FictionalMetadataTransport(deniedMetadata)))
+        revokeFlow.sourceID = source.uuidString
+        await revokeFlow.discover(session: flowSession)
+        check(flowSession.account == nil && revokeFlow.fields.isEmpty, "metadata permission failure clears active session and fields")
+        await flowSession.useDemo("flow-fixture")
         let unconfiguredFlow = NotionImportFlow()
-        unconfiguredFlow.sourceID = source.uuidString; unconfiguredFlow.propertyID = "fixture-prop"; unconfiguredFlow.propertyName = "Chosen"
-        let missing = await unconfiguredFlow.fetch(session: flowSession)
-        check(missing == nil && unconfiguredFlow.status.contains("尚未配置"), "unconfigured UI flow reports no connection")
+        unconfiguredFlow.sourceID = source.uuidString
+        await unconfiguredFlow.discover(session: flowSession)
+        check(unconfiguredFlow.fields.isEmpty && unconfiguredFlow.status.contains("无法读取"), "unconfigured UI flow reports no connection")
         let suspendedTransport = PendingNotionTransport()
-        let cancelFlow = NotionImportFlow(reader: NotionPrivatePreviewReader(transport: suspendedTransport))
-        cancelFlow.sourceID = source.uuidString; cancelFlow.propertyID = "fixture-prop"; cancelFlow.propertyName = "Chosen"
+        let cancelFlow = NotionImportFlow(reader: NotionPrivatePreviewReader(transport: suspendedTransport), metadata: metadataReader)
+        cancelFlow.sourceID = source.uuidString; await cancelFlow.discover(session: flowSession); cancelFlow.selectedFieldID = "fixture-prop"
         let pendingFlow = Task { await cancelFlow.fetch(session: flowSession) }
         while !(await suspendedTransport.isPending()) { await Task.yield() }
         cancelFlow.cancel()

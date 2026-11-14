@@ -3,8 +3,10 @@ import Foundation
 import FoundationNetworking
 #endif
 
-/// The app must supply a supported, explicitly authorized credential provider.
-/// No implementation or real credential is configured here.
+/// Production implementers must bind each source to an explicitly authorized account,
+/// return nil after revocation, and protect secrets in the main app only. Never log
+/// credentials or send them to the keyboard. No implementation or real credential
+/// is configured; authorization and secure storage require separate integration.
 protocol NotionCredentialProvider: Sendable {
     func credential(for sourceID: UUID) async throws -> String?
 }
@@ -88,7 +90,7 @@ private final class NotionBoundedRequest: NSObject, URLSessionDataDelegate, @unc
 }
 
 /// Opt-in transport. No real credential or live session is configured by the app.
-struct NotionHTTPTransport: NotionQueryTransport {
+struct NotionHTTPTransport: NotionQueryTransport, NotionMetadataTransport {
     private let credentialProvider: any NotionCredentialProvider
     init(credentialProvider: any NotionCredentialProvider) { self.credentialProvider = credentialProvider }
     func query(_ query: NotionQueryRequest) async throws -> NotionQueryResponse {
@@ -101,6 +103,28 @@ struct NotionHTTPTransport: NotionQueryTransport {
         catch is CancellationError { throw CancellationError() }
         catch let error as NotionPreviewError { throw error }
         catch { throw NotionPreviewError.unavailable }
+    }
+    func metadata(sourceID: UUID) async throws -> NotionQueryResponse {
+        guard let credential = try await credentialProvider.credential(for: sourceID),
+              !credential.isEmpty, credential.utf8.count <= 4096,
+              credential.rangeOfCharacter(from: .controlCharacters) == nil else { throw NotionPreviewError.permission }
+        try Task.checkCancellation()
+        do { return try await NotionBoundedRequest().run(Self.metadataRequest(sourceID: sourceID, credential: credential)) }
+        catch is CancellationError { throw CancellationError() }
+        catch let error as NotionPreviewError { throw error }
+        catch { throw NotionPreviewError.unavailable }
+    }
+    static func metadataRequest(sourceID: UUID, credential: String) throws -> URLRequest {
+        guard !credential.isEmpty, credential.utf8.count <= 4096,
+              credential.rangeOfCharacter(from: .controlCharacters) == nil else { throw NotionPreviewError.invalidResponse }
+        var components = URLComponents(); components.scheme = "https"; components.host = "api.notion.com"
+        components.path = "/v1/data_sources/\(sourceID.uuidString.lowercased())"
+        guard let url = components.url else { throw NotionPreviewError.invalidResponse }
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(credential)", forHTTPHeaderField: "Authorization")
+        request.setValue("2026-03-11", forHTTPHeaderField: "Notion-Version")
+        return request
     }
     static func request(_ query: NotionQueryRequest, credential: String) throws -> URLRequest {
         guard !credential.isEmpty, credential.utf8.count <= 4096, credential.rangeOfCharacter(from: .controlCharacters) == nil,
