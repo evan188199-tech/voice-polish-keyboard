@@ -7,15 +7,21 @@ protocol SpeechTranscribing: Sendable {
     var modelDisplayName: String { get }
     var downloadProgress: Double? { get async }
     var preparePhase: String? { get async }
+    var lastRawTranscript: String? { get async }
     func prepareModel() async throws
     func removeModelFiles() async throws
     /// Transcribe raw 16 kHz mono Int16 PCM. Long audio is VAD-chunked automatically.
     func transcribe(_ pcmData: Data, vocabulary: String) async throws -> String
 }
 
+extension SpeechTranscribing {
+    var lastRawTranscript: String? { get async { nil } }
+}
+
 // MARK: - sherpa-onnx SenseVoiceSmall INT8
 
 actor SenseVoiceTranscriber: SpeechTranscribing {
+    private(set) var lastRawTranscript: String?
     private var recognizer: SherpaOnnxOfflineRecognizer?
     /// Keep model path strings alive while the C API holds pointers during setup.
     private var retainedPaths: [String] = []
@@ -67,6 +73,7 @@ actor SenseVoiceTranscriber: SpeechTranscribing {
     }
 
     func transcribe(_ pcmData: Data, vocabulary: String) async throws -> String {
+        lastRawTranscript = nil
         guard let recognizer else { throw TranscriberError.notReady }
 
         let samples = pcmToFloats(pcmData)
@@ -95,6 +102,7 @@ actor SenseVoiceTranscriber: SpeechTranscribing {
         // Process each VAD chunk independently so spoken-letter collapsing
         // respects pause boundaries, then smart-join the cleaned segments.
         // Cloud polish later keeps LLM output as-is; this only shapes local ASR text.
+        lastRawTranscript = texts.joined(separator: "\n")
         let joined = LocalTextProcessor.processSegments(texts, vocabulary: vocabulary)
         guard !joined.isEmpty else { throw TranscriberError.noText }
         return joined

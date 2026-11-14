@@ -21,6 +21,9 @@ struct DictationHistoryView: View {
                                         .foregroundStyle(.secondary)
                                         .lineLimit(2)
                                 }
+                                if let error = entry.errorMessage {
+                                    Text(error).font(.caption).foregroundStyle(.orange)
+                                }
                                 HStack {
                                     Text(entry.mode.shortLabel)
                                     if let asr = entry.transcriptionLatencyMs { Text("识别 \(asr) ms") }
@@ -32,7 +35,8 @@ struct DictationHistoryView: View {
                             .padding(.vertical, 3)
                             .contextMenu {
                                 if let text = entry.result ?? Optional(entry.transcript), !text.isEmpty {
-                                    Button("复制") { UIPasteboard.general.string = text }
+                                    Button("复制整理结果") { UIPasteboard.general.string = text }
+                                    Button("恢复并复制识别原文") { UIPasteboard.general.string = entry.transcript }
                                 }
                             }
                             .swipeActions {

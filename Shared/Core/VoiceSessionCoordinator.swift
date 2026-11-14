@@ -108,6 +108,8 @@ final class VoiceSessionCoordinator: ObservableObject {
         let generation: UInt64
 
         var phase: VoiceJobPhase = .queuedASR
+        var originalText: String?
+        var preparedText: DictationTextPreparation?
         var localText: String?
         var polishedText: String?
         var finalText: String?
@@ -148,7 +150,8 @@ final class VoiceSessionCoordinator: ObservableObject {
             askFollowUpAvailable: askFollowUpAvailable,
             askFollowUpArmed: isAskFollowUpArmed,
             errorCode: lastErrorCode,
-            inputReady: isInputReady
+            inputReady: isInputReady,
+            resultNotice: lastPolishFailed ? "云端不可用 · 已保留完整本地结果" : nil
         )
     }
 
@@ -1121,7 +1124,11 @@ final class VoiceSessionCoordinator: ObservableObject {
             // SenseVoice already ran LocalTextProcessor per VAD segment.
             // Do not re-process the joined transcript here, or single-letter
             // segments separated by a pause would collapse across that boundary.
-            let local = applyScript(raw, job.snapshot.chineseScript)
+            job.originalText = await transcriber.lastRawTranscript ?? raw
+            let scripted = applyScript(raw, job.snapshot.chineseScript)
+            let preparation = DictationTextPreparation(scripted, mode: job.snapshot.polishMode)
+            job.preparedText = preparation
+            let local = preparation.body
             job.localText = local
             lastTranscription = local
 
@@ -1224,11 +1231,11 @@ final class VoiceSessionCoordinator: ObservableObject {
             // Keep the model's content, then apply lightweight local casing and
             // vocabulary normalization so polished output also respects entries
             // such as "EUPB" / "iPhone Air".
-            let normalized = LocalTextProcessor.process(
-                polished,
-                vocabulary: job.snapshot.vocabulary
-            )
-            let finalText = applyScript(normalized, job.snapshot.chineseScript)
+            // Do not run destructive ASR cleanup on a formatted provider response.
+            let finalText = applyScript(polished, job.snapshot.chineseScript)
+            guard job.preparedText?.accept(finalText) != false else {
+                throw PolishingError.contentChanged
+            }
             if job.snapshot.polishMode == .askLLM {
                 appendAskTurn(user: local, assistant: finalText)
             }
@@ -1269,16 +1276,17 @@ final class VoiceSessionCoordinator: ObservableObject {
         job.polishFailed = polishFailed
         job.finalText = finalText
         job.phase = .ready
-        job.errorMessage = nil
+        if !polishFailed { job.errorMessage = nil }
         PipelineDiagnostics.record(jobID: job.id, phase: .delivering)
         historyStore.append(
             DictationHistoryEntry(
                 id: job.id,
-                transcript: job.localText ?? "",
+                transcript: job.originalText ?? job.localText ?? "",
                 result: finalText,
                 mode: job.snapshot.polishMode,
                 transcriptionLatencyMs: job.primaryLatencyMs,
-                polishingLatencyMs: job.polishLatencyMs
+                polishingLatencyMs: job.polishLatencyMs,
+                errorMessage: job.errorMessage
             )
         )
 
@@ -1298,7 +1306,7 @@ final class VoiceSessionCoordinator: ObservableObject {
         historyStore.append(
             DictationHistoryEntry(
                 id: job.id,
-                transcript: job.localText ?? "",
+                transcript: job.originalText ?? job.localText ?? "",
                 result: nil,
                 mode: job.snapshot.polishMode,
                 transcriptionLatencyMs: job.primaryLatencyMs,

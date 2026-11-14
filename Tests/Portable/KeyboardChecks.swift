@@ -175,6 +175,7 @@ actor MockKeyboardBridge: KeyboardBridgeServing {
         let legacy = #"{"state":"ready"}"#.data(using: .utf8)!
         let decoded = try! JSONDecoder().decode(BridgeStatus.self, from: legacy)
         check(decoded.errorCode == nil && decoded.inputReady == nil, "bridge optional availability fields decode legacy snapshots")
+        await ContentChecks.run()
         print("Keyboard logic checks completed (Apple frameworks replaced; no iOS UI/audio validation).")
     }
 }

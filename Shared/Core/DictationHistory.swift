@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 struct DictationHistoryEntry: Codable, Identifiable, Hashable, Sendable {
     let id: UUID

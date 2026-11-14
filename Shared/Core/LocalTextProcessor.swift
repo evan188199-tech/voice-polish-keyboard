@@ -45,11 +45,15 @@ enum LocalTextProcessor {
     }()
 
     static func process(_ text: String, vocabulary: String) -> String {
+        // Preserve code/path/quoted content rather than deleting syllables or symbols.
+        guard !FaithfulTextFormatter.isProtected(text) else { return text }
         var t = text
 
         let fillers = ["嗯", "啊", "呃", "哦", "um", "uh", "ah"]
         for filler in fillers {
-            t = t.replacingOccurrences(of: filler, with: "")
+            // Only isolated filler tokens, never syllables inside names/English words.
+            let pattern = "(?<![\\p{L}\\p{N}])" + filler + "(?![\\p{L}\\p{N}])"
+            t = t.replacingOccurrences(of: pattern, with: "", options: [.regularExpression, .caseInsensitive])
         }
 
         let pairs: [(String, String)] = [

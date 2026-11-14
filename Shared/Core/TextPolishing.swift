@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// One prior user/assistant exchange for ask-mode follow-up.
 struct AskConversationTurn: Sendable, Equatable {
@@ -99,9 +102,14 @@ enum PolishAvailabilityResult: Equatable, Sendable {
 }
 
 final class APITextPolisher: TextPolishing, @unchecked Sendable {
+    private let session: URLSession
+    init(session: URLSession = .shared) { self.session = session }
     private let probeSystemPrompt = "Reply with exactly: ok"
 
     func polish(_ raw: String, settings: PolishingSettings) async throws -> String {
+        // Avoid exceeding the existing response budget. Preserve the entire local text;
+        // never silently send a clipped prefix or treat a truncated response as success.
+        guard raw.utf8.count <= 12_000 else { throw PolishingError.inputTooLong }
         let basePrompt = settings.styleSystemPrompt.flatMap { $0.isEmpty ? nil : $0 }
             ?? settings.mode.systemPrompt
         let prompt = settings.chineseScript.map { script in
@@ -290,7 +298,7 @@ final class APITextPolisher: TextPolishing, @unchecked Sendable {
 
         let (data, response): (Data, URLResponse)
         do {
-            (data, response) = try await URLSession.shared.data(for: request)
+            (data, response) = try await session.data(for: request)
         } catch let error as URLError where error.code == .timedOut {
             throw PolishingError.timeout
         }
@@ -301,6 +309,7 @@ final class APITextPolisher: TextPolishing, @unchecked Sendable {
             throw PolishingError.httpError(httpResponse.statusCode, bodyText)
         }
 
+        try Self.validateCompletion(data)
         if let content = Self.extractAssistantText(from: data) {
             let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty {
@@ -385,6 +394,14 @@ final class APITextPolisher: TextPolishing, @unchecked Sendable {
         return nil
     }
 
+    static func validateCompletion(_ data: Data) throws {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let choices = object["choices"] as? [[String: Any]], let first = choices.first else { return }
+        if let reason = first["finish_reason"] as? String, ["length", "max_tokens", "content_filter"].contains(reason) {
+            throw PolishingError.truncatedResponse
+        }
+    }
+
     static func hasChatChoices(in data: Data) -> Bool {
         guard
             let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -395,6 +412,9 @@ final class APITextPolisher: TextPolishing, @unchecked Sendable {
 }
 
 enum PolishingError: Error, LocalizedError {
+    case inputTooLong
+    case truncatedResponse
+    case contentChanged
     case invalidURL
     case noResponse
     case timeout
@@ -406,6 +426,9 @@ enum PolishingError: Error, LocalizedError {
 
     var errorDescription: String? {
         switch self {
+        case .inputTooLong: return "文本过长，保留完整本地整理结果。"
+        case .truncatedResponse: return "云端返回不完整，保留完整本地结果。"
+        case .contentChanged: return "云端改动超出保真整理范围，已保留本地结果。"
         case .invalidURL: return "API 地址无效，请检查设置。"
         case .noResponse: return "API 无响应。"
         case .timeout: return "API 请求超时。"
@@ -501,7 +524,7 @@ enum AskAnswerParser {
                     return false
                 }
                 return false
-            case .invalidURL, .missingAPIKey:
+            case .invalidURL, .missingAPIKey, .inputTooLong, .truncatedResponse, .contentChanged:
                 return false
             }
         }

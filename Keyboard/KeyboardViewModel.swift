@@ -587,7 +587,7 @@ final class KeyboardViewModel: ObservableObject {
             default: queueText = "处理队列 · \(pendingCount) 段"
             }
         } else if !canRetry {
-            queueText = nil
+            queueText = status.resultNotice
         }
         capture.observe(recording: status.state == .recording)
         if capture.isRecording {

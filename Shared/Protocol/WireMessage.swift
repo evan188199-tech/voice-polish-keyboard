@@ -68,6 +68,7 @@ struct BridgeStatus: Codable, Equatable, Sendable {
     /// Availability is independent of a queued job's processing phase.
     let errorCode: BridgeErrorCode?
     let inputReady: Bool?
+    let resultNotice: String?
 
     init(
         state: State,
@@ -81,7 +82,8 @@ struct BridgeStatus: Codable, Equatable, Sendable {
         askFollowUpAvailable: Bool? = nil,
         askFollowUpArmed: Bool? = nil,
         errorCode: BridgeErrorCode? = nil,
-        inputReady: Bool? = nil
+        inputReady: Bool? = nil,
+        resultNotice: String? = nil
     ) {
         self.state = state
         self.elapsedSeconds = elapsedSeconds
@@ -95,6 +97,7 @@ struct BridgeStatus: Codable, Equatable, Sendable {
         self.askFollowUpArmed = askFollowUpArmed
         self.errorCode = errorCode
         self.inputReady = inputReady
+        self.resultNotice = resultNotice
     }
 }
 
