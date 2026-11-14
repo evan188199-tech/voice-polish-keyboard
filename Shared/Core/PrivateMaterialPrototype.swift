@@ -23,6 +23,8 @@ struct ProductMaterial: Identifiable, Codable, Equatable, Sendable {
     var channels: [String] = []
     var expiresAt: Date?
     var version = 1
+    /// Opaque source scope, never a source URL or credential. Only demo is currently accepted.
+    var sourceScope = "demo"
 }
 enum MaterialAction { case textDraft, image }
 enum MaterialGate {
@@ -61,6 +63,7 @@ struct PrivateTermCandidate: Identifiable, Codable, Equatable, Sendable {
     let kind: Kind
 }
 struct TermImportPreview: Sendable {
+    let id: UUID
     let candidates: [PrivateTermCandidate]
     let rejectedCount: Int
     let ignoredFieldCount: Int
@@ -83,17 +86,18 @@ struct TermImportPreview: Sendable {
             else { rejected += 1; continue }
             if !candidates.contains(where: { $0.term == term && $0.kind == kind }) { candidates.append(.init(term: term, kind: kind)) }
         }
-        return TermImportPreview(candidates: candidates, rejectedCount: rejected, ignoredFieldCount: ignored)
+        return TermImportPreview(id: UUID(), candidates: candidates, rejectedCount: rejected, ignoredFieldCount: ignored)
     }
 }
 enum MaterialPrototypeError: Error, LocalizedError {
-    case disconnected, invalidImport, wrongAccount, reviewRequired
+    case disconnected, invalidImport, wrongAccount, reviewRequired, staleSelection
     var errorDescription: String? {
         switch self {
         case .disconnected: "真实账号尚未连接；仅能使用演示适配器。"
         case .invalidImport: "请选择不超过 256 KB 的 terms JSON；每行仅需 term 和 kind。"
         case .wrongAccount: "账号已切换，请重新预览并确认。"
         case .reviewRequired: "请先逐项人工核对导入预览。"
+        case .staleSelection: "素材来源或会话已变化，请重新选择并确认。"
         }
     }
 }
@@ -122,6 +126,30 @@ struct MaterialKeyboardSnapshot: Codable, Equatable, Sendable {
         self.accountID == accountID && self.version == version && expiresAt > now
     }
 }
+/// Explicitly approved draft-only references, not delivery or customer-access proof.
+struct MaterialTextReference: Equatable, Sendable {
+    let title: String
+    let summary: String
+    let customerURL: URL
+    let attribution: String
+    let sourceVersion: Int
+    var draftText: String { summary + "\n" + customerURL.absoluteString + "\n" + attribution }
+}
+struct MaterialImageReference: Equatable, Sendable {
+    let materialID: UUID
+    let sourceScope: String
+    let sourceVersion: Int
+}
+
+/// Opaque confirmation context. No source URL, credentials, or internal content.
+struct MaterialSelection: Equatable, Sendable {
+    fileprivate let accountID: String
+    fileprivate let generation: UInt64
+    fileprivate let materialID: UUID
+    fileprivate let sourceScope: String
+    fileprivate let version: Int
+}
+
 @MainActor final class PrivateMaterialSession: ObservableObject {
     @Published private(set) var account: MaterialAccount?
     @Published private(set) var materials: [ProductMaterial] = []
@@ -130,6 +158,7 @@ struct MaterialKeyboardSnapshot: Codable, Equatable, Sendable {
     @Published private(set) var cacheVersion = 0
     private let adapter: any MaterialReadOnlyAdapter
     private var generation: UInt64 = 0
+    private var importPreviews: [UUID: (accountID: String, generation: UInt64, preview: TermImportPreview)] = [:]
     init(adapter: any MaterialReadOnlyAdapter = MockMaterialAdapter()) { self.adapter = adapter }
     var productionConnected: Bool { false }
     func connectProduction() { status = MaterialPrototypeError.disconnected.localizedDescription }
@@ -140,28 +169,80 @@ struct MaterialKeyboardSnapshot: Codable, Equatable, Sendable {
         do {
             let result = try await adapter.materials(for: account!, now: Date())
             guard epoch == generation else { return }
-            materials = result
-            status = "演示账号 \(id) · 无真实登录或同步"
+            materials = result.filter { $0.accountID == id && $0.sourceScope == "demo" }
+            status = materials.count == result.count ? "演示账号 \(id) · 无真实登录或同步" : "已拒绝不属于当前账号或来源的演示素材"
         } catch { if epoch == generation { status = error.localizedDescription } }
     }
     func logout() { clear(); status = "已清空本地演示缓存 · 真实账号未连接" }
     func revoke() { logout() }
     private func clear() {
         generation &+= 1; cacheVersion += 1
-        account = nil; materials = []; privateTerms = []
+        account = nil; materials = []; privateTerms = []; importPreviews.removeAll()
+    }
+    /// The selected file is parsed locally; only allowed candidate fields are retained.
+    func previewImport(_ data: Data) throws -> TermImportPreview {
+        guard let account, account.isDemo else { throw MaterialPrototypeError.disconnected }
+        let preview = try TermImportPreview.parse(data)
+        importPreviews.removeAll()
+        importPreviews[preview.id] = (account.id, generation, preview)
+        return preview
     }
     func confirmImport(_ preview: TermImportPreview, selected: Set<UUID>, expectedAccount: String, reviewed: Bool = false) throws {
         guard account?.id == expectedAccount else { throw MaterialPrototypeError.wrongAccount }
         guard reviewed else { throw MaterialPrototypeError.reviewRequired }
+        guard let registered = importPreviews[preview.id], registered.accountID == expectedAccount,
+              registered.generation == generation, registered.preview.candidates == preview.candidates,
+              registered.preview.rejectedCount == preview.rejectedCount,
+              registered.preview.ignoredFieldCount == preview.ignoredFieldCount,
+              !selected.isEmpty, selected.isSubset(of: Set(preview.candidates.map(\.id))) else {
+            throw MaterialPrototypeError.staleSelection
+        }
+        importPreviews[preview.id] = nil
         let chosen = preview.candidates.filter { selected.contains($0.id) }
         for term in chosen where !privateTerms.contains(where: { $0.term == term.term && $0.kind == term.kind }) { privateTerms.append(term) }
-        // Prototype index is memory-only and account-scoped. Logout/revoke clears it.
     }
-    func draft(_ material: ProductMaterial, confirmed: Bool) throws -> String {
-        if let reason = MaterialGate.rejection(material, account: account, channel: "customerDraft", action: .textDraft, userConfirmed: confirmed) {
+    func searchTerms(_ query: String) -> [PrivateTermCandidate] {
+        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return privateTerms }
+        return privateTerms.filter { $0.term.localizedCaseInsensitiveContains(text) }
+    }
+    func searchMaterials(_ query: String) -> [ProductMaterial] {
+        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return materials }
+        return materials.filter { $0.displayName.localizedCaseInsensitiveContains(text) }
+    }
+    /// A permit is valid only for the exact currently registered item and session generation.
+    func select(_ material: ProductMaterial) throws -> MaterialSelection {
+        guard let account, materials.contains(material), material.accountID == account.id else {
+            throw MaterialPrototypeError.staleSelection
+        }
+        return MaterialSelection(accountID: account.id, generation: generation, materialID: material.id,
+                                 sourceScope: material.sourceScope, version: material.version)
+    }
+    func rejection(_ material: ProductMaterial, selection: MaterialSelection?, action: MaterialAction,
+                   confirmed: Bool, now: Date = Date()) -> String? {
+        guard let account, let selection, selection.accountID == account.id, selection.generation == generation,
+              selection.materialID == material.id, selection.sourceScope == material.sourceScope,
+              selection.version == material.version, materials.contains(material) else { return MaterialPrototypeError.staleSelection.localizedDescription }
+        return MaterialGate.rejection(material, account: account, channel: "customerDraft", action: action,
+                                      userConfirmed: confirmed, now: now)
+    }
+    func textReference(_ material: ProductMaterial, selection: MaterialSelection?, confirmed: Bool) throws -> MaterialTextReference {
+        if let reason = rejection(material, selection: selection, action: .textDraft, confirmed: confirmed) {
             throw NSError(domain: "MaterialGate", code: 1, userInfo: [NSLocalizedDescriptionKey: reason])
         }
-        return material.approvedSummary + "\n" + material.customerURL!.absoluteString + "\n" + material.attribution
+        guard let url = material.customerURL else { throw MaterialPrototypeError.staleSelection }
+        return MaterialTextReference(title: material.displayName, summary: material.approvedSummary,
+                                     customerURL: url, attribution: material.attribution, sourceVersion: material.version)
+    }
+    func draft(_ material: ProductMaterial, selection: MaterialSelection?, confirmed: Bool) throws -> String {
+        try textReference(material, selection: selection, confirmed: confirmed).draftText
+    }
+    func imageReference(_ material: ProductMaterial, selection: MaterialSelection?, confirmed: Bool) throws -> MaterialImageReference {
+        if let reason = rejection(material, selection: selection, action: .image, confirmed: confirmed) {
+            throw NSError(domain: "MaterialGate", code: 1, userInfo: [NSLocalizedDescriptionKey: reason])
+        }
+        return MaterialImageReference(materialID: material.id, sourceScope: material.sourceScope, sourceVersion: material.version)
     }
     /// Deliberately fail closed. The existing TCP bridge is not an authenticated
     /// account-sharing channel, and no App Group entitlement is configured.
