@@ -3,12 +3,11 @@ import XCTest
 
 final class VoicePipelineTests: XCTestCase {
     func testVoiceStageDiagnosticsRemainBoundedAndContainOnlyFixedMarkers() {
-        let suite = "voice-stages-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
-        for _ in 0..<42 { VoiceStageDiagnostics.record(.micRequested, defaults: defaults) }
-        VoiceStageDiagnostics.record(.captureEmpty, defaults: defaults)
-        let stages = VoiceStageDiagnostics.load(defaults: defaults)
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("voice-stages-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: file) }
+        for _ in 0..<42 { VoiceStageDiagnostics.record(.micRequested, url: file) }
+        VoiceStageDiagnostics.record(.captureEmpty, url: file)
+        let stages = VoiceStageDiagnostics.load(url: file)
         XCTAssertEqual(stages.count, 40)
         XCTAssertEqual(stages.last, .captureEmpty)
         XCTAssertTrue(stages.allSatisfy { $0 == .micRequested || $0 == .captureEmpty })

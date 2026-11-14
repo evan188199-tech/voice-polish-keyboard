@@ -72,16 +72,25 @@ enum VoiceDiagnosticStage: String, CaseIterable {
 }
 
 enum VoiceStageDiagnostics {
-    private static let key = "voice_stage_diagnostics_v1"
     private static let limit = 40
-
-    static func record(_ stage: VoiceDiagnosticStage, defaults: UserDefaults = .standard) {
-        var stages = defaults.stringArray(forKey: key) ?? []
-        stages.append(stage.rawValue)
-        defaults.set(Array(stages.suffix(limit)), forKey: key)
+    private static var fileURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("VoiceDiagnostics", isDirectory: true)
+            .appendingPathComponent("stages.json")
     }
 
-    static func load(defaults: UserDefaults = .standard) -> [VoiceDiagnosticStage] {
-        (defaults.stringArray(forKey: key) ?? []).compactMap(VoiceDiagnosticStage.init(rawValue:))
+    static func record(_ stage: VoiceDiagnosticStage, url: URL? = nil) {
+        let target = url ?? fileURL
+        var stages = load(url: target)
+        stages.append(stage)
+        guard let data = try? JSONEncoder().encode(stages.suffix(limit).map(\.rawValue)) else { return }
+        try? FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: target, options: .atomic)
+    }
+
+    static func load(url: URL? = nil) -> [VoiceDiagnosticStage] {
+        guard let data = try? Data(contentsOf: url ?? fileURL),
+              let values = try? JSONDecoder().decode([String].self, from: data) else { return [] }
+        return values.compactMap(VoiceDiagnosticStage.init(rawValue:))
     }
 }
