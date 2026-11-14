@@ -120,6 +120,29 @@ actor FictionalDelay {
               "Notion request pins API version and field filter")
         do { _ = try NotionHTTPTransport.request(request, credential: "bad\nfixture"); check(false, "invalid token must fail") }
         catch { check(true, "credential header injection is rejected") }
+        let flowSession = PrivateMaterialSession()
+        await flowSession.useDemo("flow-fixture")
+        let flow = NotionImportFlow(reader: NotionPrivatePreviewReader(transport: FictionalNotionTransport([second])))
+        flow.sourceID = source.uuidString; flow.propertyID = "fixture-prop"; flow.propertyName = "Chosen"; flow.kind = .privateRoute
+        let flowPreview = await flow.fetch(session: flowSession)
+        check(flowPreview?.candidates.count == 1 && flowSession.privateTerms.isEmpty, "configured UI flow previews without importing")
+        if let flowPreview {
+            try! flowSession.confirmImport(flowPreview, selected: [flowPreview.candidates[0].id], expectedAccount: "flow-fixture", reviewed: true)
+        }
+        check(flowSession.privateTerms.count == 1, "explicit reviewed UI flow imports selected fictional item")
+        let unconfiguredFlow = NotionImportFlow()
+        unconfiguredFlow.sourceID = source.uuidString; unconfiguredFlow.propertyID = "fixture-prop"; unconfiguredFlow.propertyName = "Chosen"
+        let missing = await unconfiguredFlow.fetch(session: flowSession)
+        check(missing == nil && unconfiguredFlow.status.contains("尚未配置"), "unconfigured UI flow reports no connection")
+        let suspendedTransport = PendingNotionTransport()
+        let cancelFlow = NotionImportFlow(reader: NotionPrivatePreviewReader(transport: suspendedTransport))
+        cancelFlow.sourceID = source.uuidString; cancelFlow.propertyID = "fixture-prop"; cancelFlow.propertyName = "Chosen"
+        let pendingFlow = Task { await cancelFlow.fetch(session: flowSession) }
+        while !(await suspendedTransport.isPending()) { await Task.yield() }
+        cancelFlow.cancel()
+        await suspendedTransport.resolve(second)
+        let cancelledPreview = await pendingFlow.value
+        check(cancelledPreview == nil && !cancelFlow.busy && cancelFlow.status.contains("取消"), "cancelled UI flow discards late preview")
         let disabled = NotionPrivatePreviewReader()
         do { _ = try await disabled.preview(sourceID: source, fields: [field]); check(false, "unconfigured transport must fail") }
         catch { check((error as? NotionPreviewError) == .unavailable, "real Notion transport is not configured by default") }

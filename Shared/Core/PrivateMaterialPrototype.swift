@@ -194,14 +194,16 @@ struct MaterialSelection: Equatable, Sendable {
         let preview: TermImportPreview
         do { preview = try await reader.preview(sourceID: sourceID, fields: fields) }
         catch NotionPreviewError.permission {
-            if generation == epoch { clear(); status = "来源不可访问，已关闭本次会话；请重新核验授权。" }
+            if generation == epoch && !Task.isCancelled { clear(); status = "来源不可访问，已关闭本次会话；请重新核验授权。" }
             throw NotionPreviewError.permission
         }
+        try Task.checkCancellation()
         guard generation == epoch, self.account == account else { throw MaterialPrototypeError.wrongAccount }
         importPreviews.removeAll()
         importPreviews[preview.id] = (account.id, generation, preview)
         return preview
     }
+    func discardImportPreview(_ id: UUID) { importPreviews[id] = nil }
     func confirmImport(_ preview: TermImportPreview, selected: Set<UUID>, expectedAccount: String, reviewed: Bool = false) throws {
         guard account?.id == expectedAccount else { throw MaterialPrototypeError.wrongAccount }
         guard reviewed else { throw MaterialPrototypeError.reviewRequired }

@@ -4,6 +4,11 @@ import UniformTypeIdentifiers
 
 struct PrivateMaterialPrototypeView: View {
     @StateObject private var session = PrivateMaterialSession()
+    @StateObject private var notion: NotionImportFlow
+    init(notionReader: NotionPrivatePreviewReader = NotionPrivatePreviewReader()) {
+        _notion = StateObject(wrappedValue: NotionImportFlow(reader: notionReader))
+    }
+    @State private var notionTask: Task<Void, Never>?
     @State private var importing = false
     @State private var preview: TermImportPreview?
     @State private var selected = Set<UUID>()
@@ -37,6 +42,33 @@ struct PrivateMaterialPrototypeView: View {
                 Button("注销 / 撤权并删除本机索引", role: .destructive) { revokeLocalIndex() }.disabled(indexBusy)
                 if pendingDeletion != nil { Button("重试删除本机索引") { retryIndexDeletion() }.disabled(indexBusy) }
                 Text(session.keyboardAvailability).font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Notion 来源与字段预览") {
+                Text("仅供配置和演示：真实账号尚未连接。输入来源 ID 和要读取的单个字段，预览不等于导入。")
+                    .font(.caption).foregroundStyle(.secondary)
+                TextField("来源 ID（UUID）", text: $notion.sourceID).textInputAutocapitalization(.never).autocorrectionDisabled().disabled(notion.busy)
+                TextField("字段 ID", text: $notion.propertyID).textInputAutocapitalization(.never).autocorrectionDisabled().disabled(notion.busy)
+                TextField("字段名称", text: $notion.propertyName).disabled(notion.busy)
+                Picker("词汇类型", selection: $notion.kind) {
+                    Text("一般词汇").tag(PrivateTermCandidate.Kind.general)
+                    Text("地名").tag(PrivateTermCandidate.Kind.place)
+                    Text("路线").tag(PrivateTermCandidate.Kind.privateRoute)
+                }
+                .disabled(notion.busy)
+                Text(notion.status).font(.caption).foregroundStyle(.secondary)
+                Button("预览所选字段") {
+                    let accountID = session.account?.id ?? ""
+                    let version = session.cacheVersion
+                    preview = nil; selected.removeAll(); reviewedImport = false
+                    notionTask = Task {
+                        if let candidate = await notion.fetch(session: session),
+                           session.account?.id == accountID, session.cacheVersion == version {
+                            preview = candidate; selected.removeAll(); reviewedImport = false
+                            importAccount = accountID; importVersion = version
+                        }
+                    }
+                }.disabled(notion.busy || session.account == nil)
+                if notion.busy { Button("取消预览") { notionTask?.cancel(); notionTask = nil; notion.cancel() } }
             }
             Section("本机搜索") {
                 TextField("搜索已确认的词汇或演示素材", text: $search)
@@ -163,7 +195,7 @@ struct PrivateMaterialPrototypeView: View {
     }
 
     private func resetUI() {
-        preview = nil; selected.removeAll(); confirmedMaterial.removeAll()
+        notionTask?.cancel(); notionTask = nil; notion.cancel(); preview = nil; selected.removeAll(); confirmedMaterial.removeAll()
         reviewedImport = false; draft = ""; draftMaterial = nil; search = ""; share = nil; copyImage = nil; message = nil
         // Clear only the clipboard item this screen created, without reading it.
         if let change = ownedPasteboardChange, UIPasteboard.general.changeCount == change { UIPasteboard.general.items = [] }
