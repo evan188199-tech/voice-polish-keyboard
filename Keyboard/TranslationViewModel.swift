@@ -87,7 +87,10 @@ import Combine
         }
         let context = TranslationContext(target: draft.target, sourceKind: .typed,
             deliveryMode: previewBeforeInsert ? .preview : .automatic, consentServiceID: capability.serviceID)
-        guard let request = draft.begin(context) else { message = draft.failure?.message ?? "请检查原文"; return nil }
+        guard let request = draft.begin(context) else {
+            message = draft.translation != nil ? "原文和目标未改变，译文已保留；修改后可重新翻译。" : (draft.failure?.message ?? "请检查原文")
+            return nil
+        }
         enqueue(request)
         return context.id
     }

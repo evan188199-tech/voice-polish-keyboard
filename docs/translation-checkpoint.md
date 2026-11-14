@@ -24,7 +24,7 @@ SWIFTC=/path/to/swiftc ./scripts/check_translation.sh
 SWIFTC=/path/to/swiftc ./scripts/test_portable.sh
 ```
 
-- 新模块 66 项断言通过。直接编译真实模型、适配器、ViewModel 和取消执行器；Combine 使用测试接口替身。
+- 新模块 67 项断言通过。直接编译真实模型、适配器、ViewModel 和取消执行器；Combine 使用测试接口替身。
 - 覆盖单点/长按上滑/无选择/取消/服务不可用，目标持久化，修改原文/目标/宿主身份后旧响应、忽略取消的 provider、超时、对象重建、默认直插回调、可选预览、重复提交/插入、语音分段顺序、原文恢复、数字/代码/URL、无配置、服务同意、能力限制、空/截断/429/网络失败。
 - URLSession 只用进程内 URLProtocol 虚构 HTTP，不连接真实 provider；其余是手工文本/受控 continuation mock。预期译文是虚构测试样例，不是翻译质量结论。
 - 原 #1–#5 的 110 项便携回归通过。该数字是既有全套断言，不是翻译单项。

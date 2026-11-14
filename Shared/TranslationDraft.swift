@@ -118,7 +118,7 @@ struct TranslationDraft: Codable, Equatable, Sendable {
     mutating func editSource(_ text: String) { invalidate(); source = text }
     mutating func changeTarget(_ target: TranslationTarget) { invalidate(); self.target = target }
     mutating func begin(_ context: TranslationContext) -> TranslationRequest? {
-        guard !isBusy, context.target == target else { return nil }
+        guard !isBusy, translation == nil, context.target == target else { return nil }
         guard !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { failure = .emptySource; return nil }
         guard source.utf8.count <= TranslationRequest.maxSourceUTF8Bytes else { failure = .inputTooLong; return nil }
         requestID = context.id; isBusy = true; failure = nil; translation = nil; previewCanInsert = false

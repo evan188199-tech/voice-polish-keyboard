@@ -100,6 +100,7 @@ check(inserted.isEmpty && m.draft.translation == nil, "edited source blocks late
 await service.finish(id2, text: "Leave the day after tomorrow.")
 await waitForTranslationTest()
 check(inserted == ["Leave the day after tomorrow."] && !m.draft.previewCanInsert, "normal success inserts directly once without preview gate")
+check(m.submitTyped() == nil, "repeated Translate after immediate success cannot insert the unchanged draft twice")
 m.insertPreview()
 check(inserted.count == 1, "auto-insert result cannot be inserted a second time via preview")
 m.editSource("hello")
