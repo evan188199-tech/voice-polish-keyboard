@@ -49,7 +49,11 @@ final class KeyboardViewModel: ObservableObject {
     var onCaptureDestination: ((UUID) -> Void)?
     var onDeliverDestination: ((UUID, String) -> Bool)?
     var onAbandonDestination: ((UUID) -> Void)?
-    private var bufferedResults: [(UUID?, String, [PlaceNameSuggestion])] = []
+    private var bufferedResults: [(UUID?, String, [PlaceNameSuggestion], CorrectionWireDisposition)] = []
+    @Published private(set) var correctionMetadataUnknown = false
+#if CORRECTION_TEST_FIXTURES
+    var testCorrectionDisposition: ((UUID?, String) -> CorrectionWireDisposition)?
+#endif
     @Published private(set) var correctionReview: CorrectionReviewState?
     @Published private(set) var correctionReviewID: UUID?
     @Published var correctionEditing = false
@@ -71,6 +75,7 @@ final class KeyboardViewModel: ObservableObject {
             var review = CorrectionReviewState(); let token = review.begin(original: original)
             _ = review.acceptProposal(CorrectionReviewProposal.make(original: original), token: token)
             correctionReview = review; correctionReviewID = UUID()
+            correctionMetadataUnknown = defaults.bool(forKey: "keyboard_correction_unknown_v1")
             correctionManualText = review.proposal?.draft ?? ""
         }
         if let data = defaults.data(forKey: "keyboard_place_review_v1") {
@@ -275,16 +280,10 @@ final class KeyboardViewModel: ObservableObject {
                     activeTranslation = nil
                     if let text = response.response.text { holdForRecovery(text) }
                 } else if let text = response.response.text {
-                    if CorrectionReviewProposal.mayNeedReview(text) {
-                        if let destination = activeDestination { onAbandonDestination?(destination) }
-                        activeDestination = nil
-                        bufferedResults.append((nil, text, []))
-                    } else {
-                        let allowed = activeDestination.map { onDeliverDestination?($0, text) == true } ?? false
-                        activeDestination = nil
-                        if allowed { receiveResult(text, autoInsert: false) }
-                        else { holdForRecovery(text) }
-                    }
+                    // Legacy immediate text has no job-bound metadata. Quarantine.
+                    if let destination = activeDestination { onAbandonDestination?(destination) }
+                    activeDestination = nil
+                    bufferedResults.append((response.response.jobID, text, [], .unknown))
                 }
             case .error, .unauthorized:
                 if let context = activeTranslation { translationModel?.cancel(context.id); activeTranslation = nil }
@@ -345,15 +344,27 @@ final class KeyboardViewModel: ObservableObject {
         }
     }
 
+    private func correctionDisposition(_ response: BridgeResponse, text: String) -> CorrectionWireDisposition {
+        guard response.jobID != nil else { return .unknown }
+#if CORRECTION_TEST_FIXTURES
+        if let fixture = testCorrectionDisposition { return fixture(response.jobID, text) }
+#endif
+        // Current wire type drops unknown fields. Re-encoding therefore fails
+        // closed until Mac's actual Codable protocol diff is integrated.
+        return CorrectionWireDisposition.classify(jobID: response.jobID, text: text,
+                                                    encodedResponse: try? JSONEncoder().encode(response))
+    }
+
     private func drainBufferedResults() {
         guard !capture.isTransitioning, correctionReview == nil, placeReview == nil, heldResult == nil, !translationRecoveryPending, translationDeliveryPending == nil else { return }
         let results = bufferedResults
         bufferedResults.removeAll()
-        for (id, text, suggestions) in results {
+        for (id, text, suggestions, disposition) in results {
             if correctionReview != nil || placeReview != nil || heldResult != nil || translationRecoveryPending || translationDeliveryPending != nil {
-                bufferedResults.append((id, text, suggestions))
+                bufferedResults.append((id, text, suggestions, disposition))
                 continue
             }
+            if disposition == .translationSource { holdForRecovery(text); continue }
             if let id, let contextID = translationJobs.removeValue(forKey: id) {
                 _ = submittedHere.remove(id)
                 if let translationModel {
@@ -363,14 +374,21 @@ final class KeyboardViewModel: ObservableObject {
                 continue
             }
             let autoInsert = id.map { submittedHere.remove($0) != nil } ?? false
-            if CorrectionReviewProposal.mayNeedReview(text) {
+            if disposition != .normal {
                 if let id, let destination = jobDestinations.removeValue(forKey: id) { onAbandonDestination?(destination) }
-                var review = CorrectionReviewState(); let token = review.begin(original: text)
-                _ = review.acceptProposal(CorrectionReviewProposal.make(original: text), token: token)
+                let reviewText: String
+                switch disposition {
+                case .review(let raw): reviewText = raw; correctionMetadataUnknown = false
+                case .unknown: reviewText = text; correctionMetadataUnknown = true
+                case .normal, .translationSource: reviewText = text; correctionMetadataUnknown = true
+                }
+                var review = CorrectionReviewState(); let token = review.begin(original: reviewText)
+                _ = review.acceptProposal(CorrectionReviewProposal.make(original: reviewText), token: token)
                 correctionReview = review; correctionReviewID = UUID()
                 correctionManualText = review.proposal?.draft ?? ""; correctionEditing = false
-                defaults.set(text, forKey: "keyboard_correction_review_v1")
-                queueText = "纠字待核对 · 后续结果按序等待"
+                defaults.set(reviewText, forKey: "keyboard_correction_review_v1")
+                defaults.set(correctionMetadataUnknown, forKey: "keyboard_correction_unknown_v1")
+                queueText = correctionMetadataUnknown ? "结果信息不完整 · 请核对" : "纠字待核对 · 后续结果按序等待"
             } else if !suggestions.isEmpty {
                 if let id, let destination = jobDestinations.removeValue(forKey: id) { onAbandonDestination?(destination) }
                 placeReview = PlaceReviewDraft(original: text, suggestions: suggestions)
@@ -404,14 +422,14 @@ final class KeyboardViewModel: ObservableObject {
         // Explicit insertion targets the currently selected field, not a claim
         // that the original field is still focused. Never replay automatically.
         correctionReview = nil; correctionReviewID = nil; correctionEditing = false; correctionManualText = ""
-        defaults.removeObject(forKey: "keyboard_correction_review_v1")
+        defaults.removeObject(forKey: "keyboard_correction_review_v1"); defaults.removeObject(forKey: "keyboard_correction_unknown_v1")
         insert(text); receiveResult(text, autoInsert: false)
         queueText = nil; drainBufferedResults()
     }
     func cancelCorrection(reviewID: UUID) {
         guard correctionReviewID == reviewID, correctionReview != nil else { return }
         correctionReview?.cancel(); correctionReview = nil; correctionReviewID = nil; correctionEditing = false; correctionManualText = ""
-        defaults.removeObject(forKey: "keyboard_correction_review_v1")
+        defaults.removeObject(forKey: "keyboard_correction_review_v1"); defaults.removeObject(forKey: "keyboard_correction_unknown_v1")
         queueText = nil; drainBufferedResults()
     }
 
@@ -756,21 +774,22 @@ final class KeyboardViewModel: ObservableObject {
             defer { if self.appearance == epoch { self.observer = nil } }
             while !Task.isCancelled, self.visible, self.appearance == epoch {
                 do {
+                    let knownTranslationJobs = Set(self.translationJobs.keys)
                     let response = try await self.client.send(self.correctionReview == nil && self.placeReview == nil && self.heldResult == nil && !self.translationRecoveryPending && self.translationDeliveryPending == nil ? .status : .ping)
-                    // Keep consumed text even if the keyboard disappeared during the request.
                     if response.response.outcome == .text, let text = response.response.text {
+                        let id = response.response.jobID
+                        let disposition = self.correctionDisposition(response.response, text: text)
+                        let item = (id, text, response.response.placeSuggestions ?? [], disposition)
                         if self.visible, self.appearance == epoch {
-                            self.bufferedResults.append((response.response.jobID, text, response.response.placeSuggestions ?? []))
-                            self.drainBufferedResults()
-                        } else if CorrectionReviewProposal.mayNeedReview(text) {
-                            // A response consumed after disappearance is still
-                            // reviewable; never turn it into a plain held result.
-                            self.bufferedResults.append((response.response.jobID, text, response.response.placeSuggestions ?? []))
-                            self.drainBufferedResults()
-                        } else if self.heldResult == nil {
-                            self.holdForRecovery(text)
+                            self.bufferedResults.append(item); self.drainBufferedResults()
+                        } else if let id, knownTranslationJobs.contains(id) {
+                            // This is a translation source, never a translated result.
+                            if self.heldResult == nil { self.holdForRecovery(text) }
+                            else { self.bufferedResults.append((id, text, response.response.placeSuggestions ?? [], .translationSource)) }
                         } else {
-                            self.bufferedResults.append((response.response.jobID, text, response.response.placeSuggestions ?? []))
+                            // A consumed late dictation must retain its metadata
+                            // and be classified before any explicit recovery.
+                            self.bufferedResults.append(item); self.drainBufferedResults()
                         }
                     }
                     guard !Task.isCancelled, self.visible, self.appearance == epoch else { return }

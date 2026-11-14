@@ -112,6 +112,11 @@ actor PortableTranslationProvider: TextTranslating {
     @MainActor static func makeModel(_ bridge: MockKeyboardBridge, defaults: UserDefaults? = nil) async -> KeyboardViewModel {
         let defaults = defaults ?? UserDefaults(suiteName: "keyboard-check-\(UUID())")!
         let model = KeyboardViewModel(client: bridge, defaults: defaults)
+        // Test-only injection simulates a future compatible host. Real BridgeResponse
+        // remains unchanged and production defaults to missing-metadata quarantine.
+        model.testCorrectionDisposition = { _, text in
+            CorrectionReviewProposal.mayNeedReview(text) ? .review(rawTranscript: text) : .normal
+        }
         model.canExplicitlyInsert = { true }
         model.onCaptureDestination = { _ in }
         model.onDeliverDestination = { [weak model] _, text in
@@ -200,9 +205,11 @@ actor PortableTranslationProvider: TextTranslating {
         legacyModel.onTextReady = { legacyInserted.append($0) }
         legacyModel.onDeliverDestination = { _, _ in false }
         await legacyModel.toggleRecording(); await legacyModel.toggleRecording()
-        check(legacyInserted.isEmpty && legacyModel.heldResult == "旧协议结果",
-              "legacy immediate result is held when target cannot be verified")
-        legacyModel.insertHeldResult()
+        check(legacyInserted.isEmpty && legacyModel.correctionReview != nil && legacyModel.correctionMetadataUnknown,
+              "legacy immediate result is quarantined when metadata is missing")
+        let legacyReviewID = legacyModel.correctionReviewID!
+        legacyModel.chooseCorrectionOriginal(reviewID: legacyReviewID)
+        legacyModel.useCorrection(reviewID: legacyReviewID)
         check(legacyInserted == ["旧协议结果"], "legacy result requires explicit recovery")
         legacyModel.disconnect()
 
@@ -238,6 +245,35 @@ actor PortableTranslationProvider: TextTranslating {
 
         // Partial keyboard fallback: the raw correction phrase must still be in
         // the returned text. A per-job bridge signal does not exist yet.
+        let realLegacyBridge = MockKeyboardBridge()
+        let realLegacy = KeyboardViewModel(client: realLegacyBridge, defaults: UserDefaults(suiteName: "legacy-metadata-\(UUID())")!)
+        var realLegacyOutputs: [String] = []
+        realLegacy.onTextReady = { realLegacyOutputs.append($0) }
+        realLegacy.onCaptureDestination = { _ in }
+        realLegacy.onDeliverDestination = { _, text in realLegacyOutputs.append(text); return true }
+        realLegacy.appear(); await realLegacy.connect()
+        await pause(300)
+        check(realLegacy.correctionReview == nil, "waiting and ping responses need no correction metadata")
+        await realLegacy.toggleRecording(); await realLegacy.toggleRecording()
+        await realLegacyBridge.complete(0, text: "普通听写")
+        await pause(600)
+        check(realLegacy.correctionReview != nil && realLegacy.correctionMetadataUnknown && realLegacyOutputs.isEmpty,
+              "actual legacy response without flat metadata quarantines even ordinary text")
+        if let id = realLegacy.correctionReviewID { realLegacy.cancelCorrection(reviewID: id) }
+        realLegacy.disconnect()
+
+        let rawFixtureBridge = MockKeyboardBridge()
+        let rawFixture = await makeModel(rawFixtureBridge)
+        let syntheticRaw = "明天联系小明，把小明改成晓明。"
+        rawFixture.testCorrectionDisposition = { _, _ in .review(rawTranscript: syntheticRaw) }
+        await rawFixture.toggleRecording(); await rawFixture.toggleRecording()
+        await rawFixtureBridge.complete(0, text: "主应用已处理文字")
+        await pause(600)
+        check(rawFixture.correctionReview?.restoreOriginal() == syntheticRaw && !rawFixture.correctionMetadataUnknown,
+              "mock compatible host routes job-bound raw text to review")
+        if let id = rawFixture.correctionReviewID { rawFixture.cancelCorrection(reviewID: id) }
+        rawFixture.disconnect()
+
         let correctionBridge = MockKeyboardBridge()
         let correctionModel = await makeModel(correctionBridge)
         var correctionOutputs: [String] = []

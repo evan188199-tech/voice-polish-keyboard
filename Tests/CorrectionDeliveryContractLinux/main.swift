@@ -67,7 +67,7 @@ struct ContractHarness {
         let response = BridgeResponse.text("虚构原文", status: BridgeStatus(state: .ready, resultNotice: "纠字目标不明确"), jobID: first)
         let encoded = try JSONEncoder().encode(response)
         let object = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
-        check(object["correctionReview"] != nil, "RED: actual BridgeResponse carries per-result correctionReview metadata")
+        check(object["correctionReviewRequired"] != nil, "RED: actual BridgeResponse carries per-result correctionReviewRequired metadata")
         if failures > 0 { print("FAILED: \(failures) (shipping bridge integration is not implemented)"); exit(1) }
         print("Correction delivery contract passed")
     }

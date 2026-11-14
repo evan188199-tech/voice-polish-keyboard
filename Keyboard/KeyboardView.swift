@@ -167,9 +167,10 @@ struct KeyboardView: View {
     private func correctionReviewContent(_ review: CorrectionReviewState, reviewID: UUID) -> some View {
         VStack(spacing: 3) {
             ScrollView {
-                Text("收到的文字：\(review.restoreOriginal())").font(.caption).frame(maxWidth: .infinity, alignment: .leading)
+                Text("\(model.correctionMetadataUnknown ? "收到的文字（标记缺失）" : "原始转写")：\(review.restoreOriginal())").font(.caption).frame(maxWidth: .infinity, alignment: .leading)
+                if model.correctionMetadataUnknown { Text("主应用未提供完整逐任务信息；请核对，不能自动插入。") .font(.caption2) }
                 if review.phase == .reviewing, let proposal = review.proposal {
-                    Text(proposal.hint).font(.caption2)
+                    Text(model.correctionMetadataUnknown ? "候选来自收到的文字，不代表语音识别正确。" : proposal.hint).font(.caption2)
                     if let draft = proposal.draft { Text("待核对：\(draft)").font(.caption) }
                     HStack {
                         ForEach(proposal.candidates, id: \.self) { candidate in

@@ -15,6 +15,6 @@ sources=(Shared/CorrectionReview.swift Shared/PrivateReferenceIndex.swift Shared
   Shared/TranslationDraft.swift Shared/TranslationDeliveryGuard.swift Shared/TranslationContentGuard.swift Shared/TranslationRequestExecutor.swift Keyboard/TranslationViewModel.swift Keyboard/BridgeTranslationService.swift Keyboard/PrivateReferenceSearchModel.swift
   Shared/Protocol/WireMessage.swift Keyboard/KeyboardBridgeClient.swift Keyboard/KeyboardViewModel.swift
   Tests/Portable/TransportStub.swift Tests/Portable/KeyboardChecks.swift)
-"$SWIFTC" -swift-version 6 -module-cache-path "$TEST_BUILD/cache" -I "$TEST_BUILD" -L "$TEST_BUILD" \
+"$SWIFTC" -swift-version 6 -D CORRECTION_TEST_FIXTURES -module-cache-path "$TEST_BUILD/cache" -I "$TEST_BUILD" -L "$TEST_BUILD" \
   -lCombine -lUIKit -parse-as-library "${sources[@]}" -o "$TEST_BUILD/checks"
 LD_LIBRARY_PATH="$TEST_BUILD${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$TEST_BUILD/checks"
