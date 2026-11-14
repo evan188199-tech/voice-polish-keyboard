@@ -200,6 +200,7 @@ actor MockKeyboardBridge: KeyboardBridgeServing {
         check(decoded.errorCode == nil && decoded.inputReady == nil, "bridge optional availability fields decode legacy snapshots")
         await ContentChecks.run()
         await PlaceChecks.run()
+        await MaterialChecks.run()
         print("Keyboard logic checks completed (Apple frameworks replaced; no iOS UI/audio validation).")
     }
 }

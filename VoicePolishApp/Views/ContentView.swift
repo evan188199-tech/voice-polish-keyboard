@@ -249,6 +249,7 @@ struct ContentView: View {
 
     private var actionButtons: some View {
         VStack(spacing: 12) {
+            NavigationLink("私人素材安全原型（未连接）") { PrivateMaterialPrototypeView() }
             Button { showHistory = true } label: {
                 Label("语音历史", systemImage: "waveform")
                     .frame(maxWidth: .infinity, alignment: .leading)

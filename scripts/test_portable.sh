@@ -8,7 +8,7 @@ for module in Combine UIKit; do
   "$SWIFTC" -swift-version 6 -module-cache-path "$TEST_BUILD/cache" -emit-module -emit-library \
     -module-name "$module" "Tests/Portable/$module.swift" -o "$TEST_BUILD/lib$module.so"
 done
-sources=(Shared/Constants.swift Shared/VoiceKeyboardCapture.swift Shared/PlaceNameReview.swift Shared/Core/PlaceNameDictionary.swift Tests/Portable/PlaceChecks.swift Shared/Core/ClipboardHistory.swift
+sources=(Shared/Constants.swift Shared/VoiceKeyboardCapture.swift Shared/PlaceNameReview.swift Shared/Core/PlaceNameDictionary.swift Shared/Core/PrivateMaterialPrototype.swift Tests/Portable/MaterialChecks.swift Tests/Portable/PlaceChecks.swift Shared/Core/ClipboardHistory.swift
   Shared/Core/ChineseScriptConverter.swift Shared/Core/PolishMode.swift Shared/Core/OrderedDeliveryCursor.swift
   Shared/Core/SpokenCorrection.swift Shared/Core/FaithfulTextFormatter.swift Shared/Core/LocalTextProcessor.swift Shared/Core/TextPolishing.swift
   Tests/Portable/ContentChecks.swift

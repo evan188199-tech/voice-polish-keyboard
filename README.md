@@ -102,3 +102,12 @@ Linux 逻辑检查（需 Swift 6；不代表 iOS 构建/真机通过）：
 ```bash
 ./scripts/test_portable.sh
 ```
+
+## 本轮独立增量与验证边界
+
+- [语音优先界面与交互（#1）](docs/voice-keyboard.md)
+- [长段保真整理与口述纠字（#2、#3）](docs/local-text-processing.md)
+- [本地地名词典与候选确认（#4）](docs/place-dictionary.md)
+- [私人词汇/素材安全原型（#5，生产账号未连接）](docs/private-material-prototype.md)
+
+以上有 Swift 6 便携逻辑与 mock 检查；不等于已通过 Xcode、真实 ASR、iPhone UI 或宿主分享/粘贴验证。已有私有 API、模型许可和仓库许可问题仍待处理，不宣称 App Store 合规。
