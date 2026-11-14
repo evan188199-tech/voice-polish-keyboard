@@ -11,6 +11,8 @@ actor MockKeyboardBridge: KeyboardBridgeServing {
     private var failFinish = false
     private var placeSuggestions = false
     private var legacyText: String?
+    private var holdStatus = false
+    private var pendingStatus: CheckedContinuation<Void, Never>?
 
     func configure(startError: BridgeErrorCode? = nil, delayStart: Bool = false,
                    delayFinish: Bool = false, delayCancel: Bool = false, failFinish: Bool = false, placeSuggestions: Bool = false,
@@ -23,6 +25,9 @@ actor MockKeyboardBridge: KeyboardBridgeServing {
         self.placeSuggestions = placeSuggestions
         self.legacyText = legacyText
     }
+    func holdNextStatus() { holdStatus = true }
+    func isStatusHeld() -> Bool { pendingStatus != nil }
+    func releaseStatus() { pendingStatus?.resume(); pendingStatus = nil }
     func seedRecording() { recording = true }
     func seedJob(_ text: String) { jobs.append((UUID(), text)) }
     func complete(_ index: Int, text: String) { jobs[index].1 = text }
@@ -69,6 +74,7 @@ actor MockKeyboardBridge: KeyboardBridgeServing {
             // A later result is ready first; only the head may be consumed.
             if let (id, text) = jobs.first, let text {
                 jobs.removeFirst()
+                if holdStatus { holdStatus = false; await withCheckedContinuation { pendingStatus = $0 } }
                 let candidates = placeSuggestions ? PlaceNameMatcher.suggestions(in: text,
                     entries: [PlaceNameEntry(name: "桂林", aliases: ["贵林"])], script: .simplified) : []
                 response = .text(text, status: status(), jobID: id, placeSuggestions: candidates)
@@ -247,11 +253,47 @@ actor PortableTranslationProvider: TextTranslating {
         let correctionQueued = await correctionBridge.jobCount()
         check(correctionModel.correctionReview != nil && correctionOutputs.isEmpty && correctionQueued == 1,
               "recognizable raw correction opens review and holds later jobs")
-        correctionModel.chooseCorrection("晓明")
-        correctionModel.useCorrection(); correctionModel.useCorrection()
+        let correctionID = correctionModel.correctionReviewID!
+        correctionModel.chooseCorrection("晓明", reviewID: correctionID)
+        correctionModel.useCorrection(reviewID: correctionID); correctionModel.useCorrection(reviewID: correctionID)
         await pause(500)
         check(correctionOutputs == ["明天联系晓明。", "普通后续。"], "explicit correction inserts once and releases next result in order")
         correctionModel.disconnect()
+
+        let lateCorrectionBridge = MockKeyboardBridge()
+        let lateCorrection = await makeModel(lateCorrectionBridge)
+        await lateCorrection.toggleRecording(); await lateCorrection.toggleRecording()
+        await lateCorrectionBridge.holdNextStatus()
+        await lateCorrectionBridge.complete(0, text: "联系小明，把小明改成晓明。")
+        for _ in 0..<100 {
+            if await lateCorrectionBridge.isStatusHeld() { break }
+            await pause(10)
+        }
+        let wasHeld = await lateCorrectionBridge.isStatusHeld()
+        check(wasHeld, "fixture holds result after host consumed it")
+        lateCorrection.disconnect()
+        await lateCorrectionBridge.releaseStatus()
+        await pause(150)
+        check(lateCorrection.correctionReview != nil && lateCorrection.heldResult == nil,
+              "correction arriving after disappearance remains a review, not an insertable raw result")
+        lateCorrection.cancelCorrection(reviewID: lateCorrection.correctionReviewID!)
+
+        let staleActionBridge = MockKeyboardBridge()
+        let staleActionModel = await makeModel(staleActionBridge)
+        await staleActionModel.toggleRecording(); await staleActionModel.toggleRecording()
+        await staleActionModel.toggleRecording(); await staleActionModel.toggleRecording()
+        await staleActionBridge.complete(0, text: "联系小明，把小明改成晓明。")
+        await staleActionBridge.complete(1, text: "联系阿文，把阿文改成阿明。")
+        await pause(600)
+        let oldReviewID = staleActionModel.correctionReviewID!
+        let oldCancel: () -> Void = { staleActionModel.cancelCorrection(reviewID: oldReviewID) }
+        oldCancel()
+        await pause(450)
+        check(staleActionModel.correctionReview != nil, "second correction awaits its own review")
+        oldCancel()
+        check(staleActionModel.correctionReview != nil, "stale cancel cannot discard a newer review")
+        if let current = staleActionModel.correctionReviewID { staleActionModel.cancelCorrection(reviewID: current) }
+        staleActionModel.disconnect()
 
         let restorationDefaults = UserDefaults(suiteName: "correction-restore-\(UUID())")!
         let restorationBridge = MockKeyboardBridge()
@@ -259,12 +301,16 @@ actor PortableTranslationProvider: TextTranslating {
         await restoration.toggleRecording(); await restoration.toggleRecording()
         await restorationBridge.complete(0, text: "联系小明，把小明改成晓明。")
         await pause(600)
-        restoration.chooseCorrection("晓明")
+        let beforeHideID = restoration.correctionReviewID!
+        restoration.chooseCorrection("晓明", reviewID: beforeHideID)
         restoration.disconnect()
+        restoration.cancelCorrection(reviewID: beforeHideID)
+        check(restoration.correctionReview?.phase == .reviewing && restoration.correctionReviewID != beforeHideID,
+              "hiding resets confirmation and invalidates old appearance actions")
         let reconstructed = KeyboardViewModel(client: MockKeyboardBridge(), defaults: restorationDefaults)
         check(reconstructed.correctionReview?.phase == .reviewing && reconstructed.correctionReview?.restoreOriginal() == "联系小明，把小明改成晓明。",
               "restart restores raw review and requires a fresh explicit choice")
-        reconstructed.cancelCorrection()
+        reconstructed.cancelCorrection(reviewID: reconstructed.correctionReviewID!)
 
         let legacyCorrectionBridge = MockKeyboardBridge()
         await legacyCorrectionBridge.configure(legacyText: "明天联系小明，把小明改成晓明。")
@@ -274,7 +320,7 @@ actor PortableTranslationProvider: TextTranslating {
         await legacyCorrection.toggleRecording(); await legacyCorrection.toggleRecording()
         check(legacyCorrection.correctionReview != nil && legacyReviewInserted.isEmpty,
               "legacy immediate correction also enters review before delivery")
-        legacyCorrection.cancelCorrection(); legacyCorrection.disconnect()
+        legacyCorrection.cancelCorrection(reviewID: legacyCorrection.correctionReviewID!); legacyCorrection.disconnect()
 
         let unknownBridge = MockKeyboardBridge()
         let unknownModel = await makeModel(unknownBridge)
@@ -286,9 +332,10 @@ actor PortableTranslationProvider: TextTranslating {
         await pause(600)
         check(unknownModel.correctionReview?.proposal?.draft == nil && unknownOutputs.isEmpty,
               "missing target stays in review without invented text")
-        unknownModel.chooseCorrectionOriginal(); unknownModel.useCorrection()
+        let unknownID = unknownModel.correctionReviewID!
+        unknownModel.chooseCorrectionOriginal(reviewID: unknownID); unknownModel.useCorrection(reviewID: unknownID)
         check(unknownOutputs.isEmpty && unknownModel.correctionReview != nil, "unavailable explicit destination retains review")
-        unknownModel.cancelCorrection(); unknownModel.useCorrection()
+        unknownModel.cancelCorrection(reviewID: unknownID); unknownModel.useCorrection(reviewID: unknownID)
         check(unknownModel.correctionReview == nil && unknownOutputs.isEmpty, "cancel invalidates old review")
         unknownModel.disconnect()
 

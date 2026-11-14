@@ -51,6 +51,7 @@ final class KeyboardViewModel: ObservableObject {
     var onAbandonDestination: ((UUID) -> Void)?
     private var bufferedResults: [(UUID?, String, [PlaceNameSuggestion])] = []
     @Published private(set) var correctionReview: CorrectionReviewState?
+    @Published private(set) var correctionReviewID: UUID?
     @Published var correctionEditing = false
     @Published private(set) var correctionManualText = ""
     @Published private(set) var placeReview: PlaceReviewDraft?
@@ -69,7 +70,7 @@ final class KeyboardViewModel: ObservableObject {
         if let original = defaults.string(forKey: "keyboard_correction_review_v1") {
             var review = CorrectionReviewState(); let token = review.begin(original: original)
             _ = review.acceptProposal(CorrectionReviewProposal.make(original: original), token: token)
-            correctionReview = review
+            correctionReview = review; correctionReviewID = UUID()
             correctionManualText = review.proposal?.draft ?? ""
         }
         if let data = defaults.data(forKey: "keyboard_place_review_v1") {
@@ -116,6 +117,15 @@ final class KeyboardViewModel: ObservableObject {
     }
 
     func disconnect() {
+        // A confirmation belongs to this keyboard appearance. Reconstruct the
+        // pending review from the retained received text and invalidate old UI
+        // callbacks; the original field is not assumed to remain focused.
+        if let old = correctionReview {
+            var review = CorrectionReviewState(); let token = review.begin(original: old.restoreOriginal())
+            _ = review.acceptProposal(CorrectionReviewProposal.make(original: old.restoreOriginal()), token: token)
+            correctionReview = review; correctionReviewID = UUID()
+            correctionManualText = review.proposal?.draft ?? ""; correctionEditing = false
+        }
         visible = false
         appearance &+= 1
         isConnecting = false
@@ -357,7 +367,7 @@ final class KeyboardViewModel: ObservableObject {
                 if let id, let destination = jobDestinations.removeValue(forKey: id) { onAbandonDestination?(destination) }
                 var review = CorrectionReviewState(); let token = review.begin(original: text)
                 _ = review.acceptProposal(CorrectionReviewProposal.make(original: text), token: token)
-                correctionReview = review
+                correctionReview = review; correctionReviewID = UUID()
                 correctionManualText = review.proposal?.draft ?? ""; correctionEditing = false
                 defaults.set(text, forKey: "keyboard_correction_review_v1")
                 queueText = "纠字待核对 · 后续结果按序等待"
@@ -377,26 +387,30 @@ final class KeyboardViewModel: ObservableObject {
         }
     }
 
-    func startCorrectionEdit() { guard correctionReview?.phase == .reviewing else { return }; correctionEditing = true }
-    func appendCorrectionText(_ text: String) { guard correctionEditing else { return }; correctionManualText += text }
-    func deleteCorrectionText() { guard correctionEditing, !correctionManualText.isEmpty else { return }; correctionManualText.removeLast() }
-    func finishCorrectionEdit() { correctionEditing = false }
-    func chooseCorrection(_ candidate: String) { correctionEditing = false; _ = correctionReview?.confirm(candidate: candidate) }
-    func chooseCorrectionOriginal() { correctionEditing = false; _ = correctionReview?.keepOriginal() }
-    func chooseCorrectionManual(_ text: String) { correctionEditing = false; _ = correctionReview?.confirmManual(text) }
-    func undoCorrection() { _ = correctionReview?.undo() }
-    func useCorrection() {
-        guard visible, canExplicitlyInsert?() == true, let insert = onTextReady,
+    func startCorrectionEdit(reviewID: UUID) {
+        guard correctionReviewID == reviewID, correctionReview?.phase == .reviewing else { return }
+        correctionEditing = true
+    }
+    func appendCorrectionText(_ text: String) { guard correctionEditing, correctionReviewID != nil else { return }; correctionManualText += text }
+    func deleteCorrectionText() { guard correctionEditing, correctionReviewID != nil, !correctionManualText.isEmpty else { return }; correctionManualText.removeLast() }
+    func finishCorrectionEdit(reviewID: UUID) { guard correctionReviewID == reviewID else { return }; correctionEditing = false }
+    func chooseCorrection(_ candidate: String, reviewID: UUID) { guard correctionReviewID == reviewID else { return }; correctionEditing = false; _ = correctionReview?.confirm(candidate: candidate) }
+    func chooseCorrectionOriginal(reviewID: UUID) { guard correctionReviewID == reviewID else { return }; correctionEditing = false; _ = correctionReview?.keepOriginal() }
+    func chooseCorrectionManual(_ text: String, reviewID: UUID) { guard correctionReviewID == reviewID else { return }; correctionEditing = false; _ = correctionReview?.confirmManual(text) }
+    func undoCorrection(reviewID: UUID) { guard correctionReviewID == reviewID else { return }; _ = correctionReview?.undo() }
+    func useCorrection(reviewID: UUID) {
+        guard correctionReviewID == reviewID, visible, canExplicitlyInsert?() == true, let insert = onTextReady,
               let text = correctionReview?.consumeConfirmed() else { return }
         // Explicit insertion targets the currently selected field, not a claim
         // that the original field is still focused. Never replay automatically.
-        correctionReview = nil; correctionEditing = false; correctionManualText = ""; defaults.removeObject(forKey: "keyboard_correction_review_v1")
+        correctionReview = nil; correctionReviewID = nil; correctionEditing = false; correctionManualText = ""
+        defaults.removeObject(forKey: "keyboard_correction_review_v1")
         insert(text); receiveResult(text, autoInsert: false)
         queueText = nil; drainBufferedResults()
     }
-    func cancelCorrection() {
-        guard correctionReview != nil else { return }
-        correctionReview?.cancel(); correctionReview = nil; correctionEditing = false; correctionManualText = ""
+    func cancelCorrection(reviewID: UUID) {
+        guard correctionReviewID == reviewID, correctionReview != nil else { return }
+        correctionReview?.cancel(); correctionReview = nil; correctionReviewID = nil; correctionEditing = false; correctionManualText = ""
         defaults.removeObject(forKey: "keyboard_correction_review_v1")
         queueText = nil; drainBufferedResults()
     }
@@ -746,6 +760,11 @@ final class KeyboardViewModel: ObservableObject {
                     // Keep consumed text even if the keyboard disappeared during the request.
                     if response.response.outcome == .text, let text = response.response.text {
                         if self.visible, self.appearance == epoch {
+                            self.bufferedResults.append((response.response.jobID, text, response.response.placeSuggestions ?? []))
+                            self.drainBufferedResults()
+                        } else if CorrectionReviewProposal.mayNeedReview(text) {
+                            // A response consumed after disappearance is still
+                            // reviewable; never turn it into a plain held result.
                             self.bufferedResults.append((response.response.jobID, text, response.response.placeSuggestions ?? []))
                             self.drainBufferedResults()
                         } else if self.heldResult == nil {

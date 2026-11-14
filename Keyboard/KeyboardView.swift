@@ -84,8 +84,8 @@ struct KeyboardView: View {
         VStack(spacing: 0) {
             voiceToolbar
             Spacer(minLength: 4)
-            if let review = model.correctionReview, model.canSwitchPage {
-                correctionReviewContent(review)
+            if let review = model.correctionReview, let reviewID = model.correctionReviewID, model.canSwitchPage {
+                correctionReviewContent(review, reviewID: reviewID)
             } else if privateReferences.isOpen && model.canSwitchPage {
                 privateReferenceContent
             } else if translation.showPreview && model.canSwitchPage {
@@ -164,7 +164,7 @@ struct KeyboardView: View {
         }
     }
 
-    private func correctionReviewContent(_ review: CorrectionReviewState) -> some View {
+    private func correctionReviewContent(_ review: CorrectionReviewState, reviewID: UUID) -> some View {
         VStack(spacing: 3) {
             ScrollView {
                 Text("收到的文字：\(review.restoreOriginal())").font(.caption).frame(maxWidth: .infinity, alignment: .leading)
@@ -173,7 +173,7 @@ struct KeyboardView: View {
                     if let draft = proposal.draft { Text("待核对：\(draft)").font(.caption) }
                     HStack {
                         ForEach(proposal.candidates, id: \.self) { candidate in
-                            Button(candidate) { model.chooseCorrection(candidate) }.frame(minHeight: 40)
+                            Button(candidate) { model.chooseCorrection(candidate, reviewID: reviewID) }.frame(minHeight: 40)
                         }
                     }
                     Text("手动稿：\(model.correctionManualText)").font(.caption)
@@ -181,16 +181,16 @@ struct KeyboardView: View {
             }
             if review.phase == .reviewing {
                 HStack {
-                    Button("编辑") { model.startCorrectionEdit(); page = .abc }
-                    Button("采用手动稿") { model.chooseCorrectionManual(model.correctionManualText) }
-                    Button("保留收到的文字") { model.chooseCorrectionOriginal() }
-                    Button("取消") { model.cancelCorrection() }
+                    Button("编辑") { if model.correctionReviewID == reviewID { model.startCorrectionEdit(reviewID: reviewID); page = .abc } }
+                    Button("采用手动稿") { model.chooseCorrectionManual(model.correctionManualText, reviewID: reviewID) }
+                    Button("保留收到的文字") { model.chooseCorrectionOriginal(reviewID: reviewID) }
+                    Button("取消") { model.cancelCorrection(reviewID: reviewID) }
                 }.font(.caption).frame(minHeight: 44)
             } else if review.phase == .confirmed {
                 HStack {
-                    Button("返回修改") { model.undoCorrection() }
-                    Button("插入当前输入框") { model.useCorrection() }
-                    Button("取消") { model.cancelCorrection() }
+                    Button("返回修改") { model.undoCorrection(reviewID: reviewID) }
+                    Button("插入当前输入框") { model.useCorrection(reviewID: reviewID) }
+                    Button("取消") { model.cancelCorrection(reviewID: reviewID) }
                 }.font(.caption).frame(minHeight: 44)
             }
         }
@@ -426,8 +426,10 @@ struct KeyboardView: View {
         HStack {
             Text(model.correctionManualText.isEmpty ? "输入完整结果" : model.correctionManualText)
                 .font(.caption).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-            Button("完成") { model.finishCorrectionEdit(); page = .voice }
-                .font(.caption.weight(.semibold)).frame(minHeight: 36)
+            if let reviewID = model.correctionReviewID {
+                Button("完成") { if model.correctionReviewID == reviewID { model.finishCorrectionEdit(reviewID: reviewID); page = .voice } }
+                    .font(.caption.weight(.semibold)).frame(minHeight: 36)
+            }
         }.accessibilityLabel("编辑纠字草稿，不会直接输入宿主")
     }
 
@@ -520,7 +522,7 @@ struct KeyboardView: View {
                 }
             }
             characterKey("回车", accessibilityLabel: "回车，遵循当前应用行为", style: .returnKey) {
-                if model.correctionEditing { model.finishCorrectionEdit(); page = .voice }
+                if model.correctionEditing, let reviewID = model.correctionReviewID { model.finishCorrectionEdit(reviewID: reviewID); page = .voice }
                 else if privateReferences.isEditing { privateReferences.isEditing = false; page = .voice }
                 else if translation.isEditingSource { requestInsertion("\n") } else { requestAction(onReturn) }
             }
