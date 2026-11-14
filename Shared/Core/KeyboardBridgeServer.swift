@@ -160,14 +160,15 @@ actor KeyboardBridgeServer {
             )
         case .status:
             let requestedJobID = message.jobID
-            if let outcome = await coordinator.takeJobOutcome(jobID: requestedJobID) {
+            let delivery = await coordinator.takeBridgeOutcome(jobID: requestedJobID)
+            if let outcome = delivery.outcome {
                 switch outcome {
                 case .text(let text):
                     let status = await coordinator.currentStatus
                     BridgeServer.send(
                         response: WireResponse(
                             requestID: message.requestID,
-                            response: .text(text, status: status, jobID: requestedJobID ?? status.jobID)
+                            response: .text(text, status: status, jobID: delivery.jobID)
                         ),
                         over: connection
                     )

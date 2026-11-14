@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 /// One captured clipboard item.
 ///

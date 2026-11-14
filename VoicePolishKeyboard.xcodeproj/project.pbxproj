@@ -63,6 +63,8 @@
 		E864564E9651FAD205CB102D /* VocabularyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6454ED31C9E7BE3BF25B6ACB /* VocabularyView.swift */; };
 		EA963925E64565DC6111860C /* DeleteRepeatController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F889D99651360D99CBF82D6 /* DeleteRepeatController.swift */; };
 		F366520F7AB8352B27EB308A /* VoicePolishShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 221ACC26548F917E6558A2A1 /* VoicePolishShortcuts.swift */; };
+		DA0120261114000000000001 /* VoiceKeyboardCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0120261114000000000003 /* VoiceKeyboardCapture.swift */; };
+		DA0120261114000000000002 /* VoiceKeyboardCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0120261114000000000003 /* VoiceKeyboardCapture.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -150,6 +152,7 @@
 		F92C0F104846EDF501406C06 /* ChineseScriptConverter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChineseScriptConverter.swift; sourceTree = "<group>"; };
 		F9362904B494907411C1AB81 /* ActivateVoiceSessionIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivateVoiceSessionIntent.swift; sourceTree = "<group>"; };
 		FD9BF459666C4FBB7AFA69A4 /* SherpaOnnxPackage */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SherpaOnnxPackage; path = Vendor/SherpaOnnxPackage; sourceTree = SOURCE_ROOT; };
+		DA0120261114000000000003 /* VoiceKeyboardCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceKeyboardCapture.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -243,6 +246,7 @@
 				5CE168628B543948A9B95960 /* Constants.swift */,
 				0F889D99651360D99CBF82D6 /* DeleteRepeatController.swift */,
 				E49B23FAC15A8D8327F47DA1 /* ShiftState.swift */,
+				DA0120261114000000000003 /* VoiceKeyboardCapture.swift */,
 				71D1E708042CA34886F8EA9C /* Core */,
 				D835CC8078820694DA0D66F5 /* Protocol */,
 			);
@@ -449,6 +453,7 @@
 				E827F23053F6B430DE892C3A /* PolishMode.swift in Sources */,
 				8249E7DF06A518EB4031B994 /* SettingsView.swift in Sources */,
 				9EDFF8DB65083E79ED20F37A /* ShiftState.swift in Sources */,
+				DA0120261114000000000001 /* VoiceKeyboardCapture.swift in Sources */,
 				A86A1BAF9D1E69EBC0EBD7B8 /* SpeechTranscribing.swift in Sources */,
 				141575C6D0C00822764642EB /* StyleProfile.swift in Sources */,
 				3405088FA6CD8393CDC91653 /* StyleProfilesView.swift in Sources */,
@@ -481,6 +486,7 @@
 				AE396831AEECD305156EEA2E /* KeyboardViewModel.swift in Sources */,
 				AAB64C34CD2279B51C72505B /* PolishMode.swift in Sources */,
 				6C00DFA57AB6782489BB7467 /* ShiftState.swift in Sources */,
+				DA0120261114000000000002 /* VoiceKeyboardCapture.swift in Sources */,
 				5A6CA211E120858BD11E9941 /* WireMessage.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

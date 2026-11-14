@@ -159,6 +159,12 @@ actor BridgeClient {
         )
         let data = try BridgeFrame.encode(message)
 
+        // A suspended companion may keep TCP open without replying. Bound the
+        // request so a lost start acknowledgement cannot lock the keyboard forever.
+        let timeout = DispatchWorkItem { connection.cancel() }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 4, execute: timeout)
+        defer { timeout.cancel() }
+
         do {
             return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<WireResponse, Error>) in
                 connection.send(content: data, completion: .contentProcessed { error in

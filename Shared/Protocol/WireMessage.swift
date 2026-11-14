@@ -65,6 +65,9 @@ struct BridgeStatus: Codable, Equatable, Sendable {
     let askFollowUpAvailable: Bool?
     /// Whether the next ask capture will include conversation history.
     let askFollowUpArmed: Bool?
+    /// Availability is independent of a queued job's processing phase.
+    let errorCode: BridgeErrorCode?
+    let inputReady: Bool?
 
     init(
         state: State,
@@ -76,7 +79,9 @@ struct BridgeStatus: Codable, Equatable, Sendable {
         pendingCount: Int? = nil,
         chineseScript: String? = nil,
         askFollowUpAvailable: Bool? = nil,
-        askFollowUpArmed: Bool? = nil
+        askFollowUpArmed: Bool? = nil,
+        errorCode: BridgeErrorCode? = nil,
+        inputReady: Bool? = nil
     ) {
         self.state = state
         self.elapsedSeconds = elapsedSeconds
@@ -88,6 +93,8 @@ struct BridgeStatus: Codable, Equatable, Sendable {
         self.chineseScript = chineseScript
         self.askFollowUpAvailable = askFollowUpAvailable
         self.askFollowUpArmed = askFollowUpArmed
+        self.errorCode = errorCode
+        self.inputReady = inputReady
     }
 }
 

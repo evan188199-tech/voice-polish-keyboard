@@ -142,10 +142,13 @@ final class VoiceSessionCoordinator: ObservableObject {
             message: statusMessage,
             polishEnabled: settings?.polishEnabled,
             polishMode: settings?.polishMode.rawValue,
+            jobID: jobAtDeliveryCursor()?.id,
             pendingCount: pendingCount,
             chineseScript: settings?.chineseScript.rawValue,
             askFollowUpAvailable: askFollowUpAvailable,
-            askFollowUpArmed: isAskFollowUpArmed
+            askFollowUpArmed: isAskFollowUpArmed,
+            errorCode: lastErrorCode,
+            inputReady: isInputReady
         )
     }
 
@@ -454,7 +457,7 @@ final class VoiceSessionCoordinator: ObservableObject {
         state = .recording
         elapsedSeconds = 0
         inputLevel = 0
-        statusMessage = "录音中 · 松开发送"
+        statusMessage = "录音中 · 再次点击完成"
         lastErrorCode = nil
         noteSessionActivity(reason: "startRecording")
         recorder.beginRecording()
@@ -566,13 +569,16 @@ final class VoiceSessionCoordinator: ObservableObject {
         if isFinalizingCapture {
             return
         }
+        guard state == .recording else { return }
         captureEpoch &+= 1
         audioTask?.cancel()
         audioTask = nil
-        Task { recorder.cancelRecording() }
+        // Close the capture synchronously before another start can open the sink.
+        recorder.cancelRecording()
         elapsedSeconds = nil
         inputLevel = 0
-        refreshProcessingStatus(defaultMessage: "已取消 · 按住说话")
+        state = .ready
+        refreshProcessingStatus(defaultMessage: "已取消 · 点击说话")
         noteSessionActivity(reason: "cancelRecording")
     }
 
@@ -611,6 +617,12 @@ final class VoiceSessionCoordinator: ObservableObject {
         case text(String)
         case failed(String)
         case discarded
+    }
+
+    /// Identity and consumption must happen in one MainActor turn, even with multiple clients.
+    func takeBridgeOutcome(jobID: UUID?) -> (jobID: UUID?, outcome: JobOutcome?) {
+        let identity = jobID ?? jobAtDeliveryCursor()?.id
+        return (identity, takeJobOutcome(jobID: jobID))
     }
 
     /// Consume a deliverable job result. `jobID == nil` returns the oldest deliverable job.
@@ -952,6 +964,11 @@ final class VoiceSessionCoordinator: ObservableObject {
             guard self.state != .inactive else { return }
             if self.state == .recording {
                 // User started talking during the wait edge; reschedule.
+                self.scheduleIdleTimeoutIfNeeded()
+                return
+            }
+            // Committed work must survive a long recognition / cloud queue.
+            if self.pendingCount > 0 {
                 self.scheduleIdleTimeoutIfNeeded()
                 return
             }

@@ -17,11 +17,17 @@ final class KeyboardViewController: UIInputViewController {
         if hasFullAccess {
             _ = ClipboardCapture.captureIfNeeded()
         }
+        viewModel.appear()
+        viewModel.onTextReady = { [weak self] text in
+            guard let self, self.view.window != nil else { return }
+            self.textDocumentProxy.insertText(text)
+        }
         Task { await viewModel.connect() }
     }
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        viewModel.onTextReady = nil
         viewModel.disconnect()
     }
 
@@ -42,6 +48,9 @@ final class KeyboardViewController: UIInputViewController {
             },
             onActivateSession: { [weak self] in
                 self?.openHostAndActivateSession()
+            },
+            onNextKeyboard: { [weak self] in
+                self?.advanceToNextInputMode()
             }
         )
 
