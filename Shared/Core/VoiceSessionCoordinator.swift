@@ -652,15 +652,21 @@ final class VoiceSessionCoordinator: ObservableObject {
     }
 
     /// Identity and consumption must happen in one MainActor turn, even with multiple clients.
-    func takeBridgeOutcome(jobID: UUID?) -> (jobID: UUID?, outcome: JobOutcome?, placeSuggestions: [PlaceNameSuggestion]) {
+    func takeBridgeOutcome(jobID: UUID?) -> (jobID: UUID?, outcome: JobOutcome?, placeSuggestions: [PlaceNameSuggestion], rawTranscript: String?, correctionReviewRequired: Bool?) {
         let identity = jobID ?? unreportedFailures.first ?? jobAtDeliveryCursor()?.id
+        // Capture before consumption: consuming the outcome can prune its job.
+        let preparation = identity.flatMap { jobs[$0] }.flatMap { $0.isTranslation ? nil : $0.preparedText }
         var suggestions: [PlaceNameSuggestion] = []
         if let identity, let job = jobs[identity], job.phase == .ready, !job.isTranslation,
            job.snapshot.polishMode != .coding, job.snapshot.polishMode != .askLLM {
             suggestions = PlaceNameMatcher.suggestions(in: job.finalText ?? "", entries: PlaceNameDictionaryStore.shared.entries,
                                                        script: job.snapshot.chineseScript)
         }
-        return (identity, takeJobOutcome(jobID: jobID), suggestions)
+        let outcome = takeJobOutcome(jobID: jobID)
+        if case .text = outcome {
+            return (identity, outcome, suggestions, preparation?.original, preparation?.correctionNeedsConfirmation)
+        }
+        return (identity, outcome, [], nil, nil)
     }
 
     /// Consume a deliverable job result. `jobID == nil` returns the oldest deliverable job.

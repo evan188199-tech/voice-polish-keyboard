@@ -122,6 +122,10 @@ struct BridgeResponse: Codable, Sendable {
     /// Clipboard history returned by `syncClipboardHistory`.
     let clipboardEntries: [ClipboardEntry]?
     let placeSuggestions: [PlaceNameSuggestion]?
+    /// Pre-correction transcript and review decision for this response's job only.
+    /// These remain local to the authenticated app/keyboard bridge.
+    let rawTranscript: String?
+    let correctionReviewRequired: Bool?
 
     static func ok(
         status: BridgeStatus? = nil,
@@ -137,7 +141,9 @@ struct BridgeResponse: Codable, Sendable {
             errorCode: nil,
             jobID: jobID,
             clipboardEntries: clipboardEntries,
-            placeSuggestions: nil
+            placeSuggestions: nil,
+            rawTranscript: nil,
+            correctionReviewRequired: nil
         )
     }
 
@@ -145,7 +151,9 @@ struct BridgeResponse: Codable, Sendable {
         _ value: String,
         status: BridgeStatus? = nil,
         jobID: UUID? = nil,
-        placeSuggestions: [PlaceNameSuggestion]? = nil
+        placeSuggestions: [PlaceNameSuggestion]? = nil,
+        rawTranscript: String? = nil,
+        correctionReviewRequired: Bool? = nil
     ) -> BridgeResponse {
         BridgeResponse(
             outcome: .text,
@@ -155,7 +163,9 @@ struct BridgeResponse: Codable, Sendable {
             errorCode: nil,
             jobID: jobID,
             clipboardEntries: nil,
-            placeSuggestions: placeSuggestions
+            placeSuggestions: placeSuggestions,
+            rawTranscript: rawTranscript,
+            correctionReviewRequired: correctionReviewRequired
         )
     }
 
@@ -173,7 +183,9 @@ struct BridgeResponse: Codable, Sendable {
             errorCode: code,
             jobID: jobID,
             clipboardEntries: nil,
-            placeSuggestions: nil
+            placeSuggestions: nil,
+            rawTranscript: nil,
+            correctionReviewRequired: nil
         )
     }
 
@@ -185,7 +197,9 @@ struct BridgeResponse: Codable, Sendable {
         errorCode: .unauthorized,
         jobID: nil,
         clipboardEntries: nil,
-        placeSuggestions: nil
+        placeSuggestions: nil,
+        rawTranscript: nil,
+        correctionReviewRequired: nil
     )
 }
 

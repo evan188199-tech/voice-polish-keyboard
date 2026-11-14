@@ -181,7 +181,9 @@ actor KeyboardBridgeServer {
                     BridgeServer.send(
                         response: WireResponse(
                             requestID: message.requestID,
-                            response: .text(text, status: status, jobID: delivery.jobID, placeSuggestions: delivery.placeSuggestions)
+                            response: .text(text, status: status, jobID: delivery.jobID, placeSuggestions: delivery.placeSuggestions,
+                                            rawTranscript: delivery.rawTranscript,
+                                            correctionReviewRequired: delivery.correctionReviewRequired)
                         ),
                         over: connection
                     )

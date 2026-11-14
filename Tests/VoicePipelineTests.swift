@@ -2,6 +2,23 @@ import XCTest
 @testable import VoicePolishApp
 
 final class VoicePipelineTests: XCTestCase {
+    func testBridgeReviewMetadataIsPerResponseAndLegacyCompatible() throws {
+        let first = UUID(), second = UUID()
+        let firstResponse = BridgeResponse.text("小明", jobID: first, rawTranscript: "小明，不对，是晓明", correctionReviewRequired: true)
+        let secondResponse = BridgeResponse.text("今天天晴", jobID: second, rawTranscript: "今天天晴", correctionReviewRequired: false)
+        let firstDecoded = try JSONDecoder().decode(BridgeResponse.self, from: JSONEncoder().encode(firstResponse))
+        let secondDecoded = try JSONDecoder().decode(BridgeResponse.self, from: JSONEncoder().encode(secondResponse))
+        XCTAssertEqual(firstDecoded.jobID, first)
+        XCTAssertEqual(firstDecoded.rawTranscript, "小明，不对，是晓明")
+        XCTAssertEqual(firstDecoded.correctionReviewRequired, true)
+        XCTAssertEqual(secondDecoded.jobID, second)
+        XCTAssertEqual(secondDecoded.rawTranscript, "今天天晴")
+        XCTAssertEqual(secondDecoded.correctionReviewRequired, false)
+        let legacy = try JSONDecoder().decode(BridgeResponse.self, from: Data(#"{"outcome":"text","text":"旧结果"}"#.utf8))
+        XCTAssertNil(legacy.rawTranscript)
+        XCTAssertNil(legacy.correctionReviewRequired)
+        XCTAssertNil(BridgeResponse.error("失败").rawTranscript)
+    }
     func testVoiceStageDiagnosticsRemainBoundedAndContainOnlyFixedMarkers() {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("voice-stages-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: file) }
