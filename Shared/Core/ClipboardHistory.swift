@@ -92,14 +92,13 @@ enum ClipboardHistoryStore {
 /// Because the bridge is one-way (keyboard = client, main app = server), the main app
 /// cannot push deletions back to the keyboard. Deletions here are "hidden" via an id set
 /// and applied on the next incoming sync so they stick.
-final class ClipboardMirrorStore: ObservableObject, @unchecked Sendable {
+@MainActor
+final class ClipboardMirrorStore: ObservableObject {
     static let shared = ClipboardMirrorStore()
 
     private let entriesKey = "clipboard_mirror_v1"
     private let hiddenIDsKey = "clipboard_hidden_ids_v1"
     private let defaults: UserDefaults
-    private let lock = NSLock()
-
     @Published private(set) var entries: [ClipboardEntry] = []
     private var hiddenIDs: Set<String> = []
 
@@ -109,60 +108,38 @@ final class ClipboardMirrorStore: ObservableObject, @unchecked Sendable {
     }
 
     private func reload() {
-        lock.lock()
-        defer { lock.unlock() }
         if let data = defaults.data(forKey: entriesKey),
            let decoded = try? JSONDecoder().decode([ClipboardEntry].self, from: data) {
             entries = decoded
-        } else {
-            entries = []
         }
         if let ids = defaults.array(forKey: hiddenIDsKey) as? [String] {
             hiddenIDs = Set(ids)
-        } else {
-            hiddenIDs = []
         }
         entries = entries.filter { !hiddenIDs.contains($0.id) }
-        persistLocked()
+        persist()
     }
 
-    /// Replace the mirror with the incoming keyboard snapshot, then filter out hidden ids.
-    /// Returns the stored (visible) list. Safe to call from any thread.
+    /// All mirror changes and persistence are serialized on the main actor.
     @discardableResult
     func merge(_ incoming: [ClipboardEntry]) -> [ClipboardEntry] {
-        lock.lock()
-        defer { lock.unlock() }
-        let visible = incoming.filter { !hiddenIDs.contains($0.id) }
-        let capped = Array(visible.prefix(ClipboardHistoryPolicy.maxEntries))
-        let result = capped
-        DispatchQueue.main.async { [weak self] in
-            self?.entries = capped
-        }
-        persistLocked()
-        return result
+        entries = Array(incoming.filter { !hiddenIDs.contains($0.id) }.prefix(ClipboardHistoryPolicy.maxEntries))
+        persist()
+        return entries
     }
 
     func hide(id: String) {
-        lock.lock()
-        defer { lock.unlock() }
         hiddenIDs.insert(id)
-        DispatchQueue.main.async { [weak self] in
-            self?.entries.removeAll { $0.id == id }
-        }
-        persistLocked()
+        entries.removeAll { $0.id == id }
+        persist()
     }
 
     func clear() {
-        lock.lock()
-        defer { lock.unlock() }
-        for entry in entries { hiddenIDs.insert(entry.id) }
-        DispatchQueue.main.async { [weak self] in
-            self?.entries = []
-        }
-        persistLocked()
+        hiddenIDs.formUnion(entries.map(\.id))
+        entries = []
+        persist()
     }
 
-    private func persistLocked() {
+    private func persist() {
         if let data = try? JSONEncoder().encode(entries) {
             defaults.set(data, forKey: entriesKey)
         }
