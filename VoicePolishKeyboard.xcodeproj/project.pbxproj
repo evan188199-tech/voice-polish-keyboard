@@ -51,6 +51,7 @@
 		7113B7EC19A2CB864B69C60F /* KeyboardBridgeServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 296D0CAEBFAB507176B3120D /* KeyboardBridgeServer.swift */; };
 		711899FC1F7D28556BA12109 /* NotionHTTPTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09CE63425B407FAFC444E689 /* NotionHTTPTransport.swift */; };
 		74461A94F5803758ACA1DE65 /* TranslationPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8B03A04CCFE10218662018C /* TranslationPreviewView.swift */; };
+		75E50B0B263DF2282CA76DCC /* TranslationServiceRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D872D0524EE8001C7CE4073 /* TranslationServiceRegistry.swift */; };
 		789ACCBC65BCD8B4AAAF4E54 /* NotionPrivatePreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2496352F8EE70E66EEFD7535 /* NotionPrivatePreview.swift */; };
 		7E9636BB5DD821C419958E1A /* TranslationDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77980685C71555B056B05581 /* TranslationDraft.swift */; };
 		7EEBE20DBAF48FBF6DA10519 /* ClipboardHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABEE5CAD724D4DDF4085D913 /* ClipboardHistoryView.swift */; };
@@ -84,6 +85,7 @@
 		B177B7736D101F78A487C7D9 /* LocalTextProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74BF38A2C1A016749A3294DE /* LocalTextProcessor.swift */; };
 		B21415A00146C896EB839405 /* SherpaOnnx in Frameworks */ = {isa = PBXBuildFile; productRef = 129FFE3A038F802EFAEEC566 /* SherpaOnnx */; };
 		B3B10A78D0F9CD0BFF369402 /* TranslationViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E6009C79BB89DF9F686ED24 /* TranslationViewModel.swift */; };
+		B4AC816E016B95719FF19D0B /* TranslationServiceFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = E309B89A51F167C6C5AF9E26 /* TranslationServiceFactory.swift */; };
 		B560250E647407F0B6982062 /* Constants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CE168628B543948A9B95960 /* Constants.swift */; };
 		B7889D14AF7F4C61ADDF5315 /* BridgeTranslationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F0E278F0F44132A152A4129 /* BridgeTranslationService.swift */; };
 		B8906B6D16BAFF900E2E6E63 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09E19B940612EB5883B7069F /* ContentView.swift */; };
@@ -157,6 +159,7 @@
 		317BBECD25CF92A53F75A1E7 /* PlaceNameReview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaceNameReview.swift; sourceTree = "<group>"; };
 		3305F071C6EEA40A03F26942 /* PolishMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PolishMode.swift; sourceTree = "<group>"; };
 		348487EA5F9FED773BA465AD /* PlaceNameDictionaryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaceNameDictionaryView.swift; sourceTree = "<group>"; };
+		3D872D0524EE8001C7CE4073 /* TranslationServiceRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationServiceRegistry.swift; sourceTree = "<group>"; };
 		403DEF05BE6CDDD9D792F48E /* FaithfulTextFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FaithfulTextFormatter.swift; sourceTree = "<group>"; };
 		40C749D503B51C12ECB3FCE2 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		4BBB68977804759BC02CA286 /* TextPolishing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextPolishing.swift; sourceTree = "<group>"; };
@@ -206,6 +209,7 @@
 		D7A62B2E5B0224CA72BD9468 /* Keyboard.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = Keyboard.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		D9A2555DDBE7BD1352107C0F /* KeyboardViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardViewController.swift; sourceTree = "<group>"; };
 		DE942AADB7FCC411BE79E532 /* VoicePipelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoicePipelineTests.swift; sourceTree = "<group>"; };
+		E309B89A51F167C6C5AF9E26 /* TranslationServiceFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationServiceFactory.swift; sourceTree = "<group>"; };
 		E49B23FAC15A8D8327F47DA1 /* ShiftState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShiftState.swift; sourceTree = "<group>"; };
 		E6AF26D477C5E5EA0629253E /* WireMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireMessage.swift; sourceTree = "<group>"; };
 		EAFEAAD09F2F50FB9010215F /* PrivateMaterialPrototypeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateMaterialPrototypeView.swift; sourceTree = "<group>"; };
@@ -312,6 +316,8 @@
 				4BBB68977804759BC02CA286 /* TextPolishing.swift */,
 				C7171574A67AC849E1D34BCB /* TranslationPreferences.swift */,
 				0CAC1CD50908D190D98793B8 /* TranslationService.swift */,
+				E309B89A51F167C6C5AF9E26 /* TranslationServiceFactory.swift */,
+				3D872D0524EE8001C7CE4073 /* TranslationServiceRegistry.swift */,
 				7A21D46B99FD776275FBBA97 /* VocabularyEntry.swift */,
 				F119E47AC0574931BB8CD727 /* VoicePipeline.swift */,
 				B7CACD28D5A5CF864C5293C0 /* VoiceSessionCoordinator.swift */,
@@ -572,6 +578,8 @@
 				6792C922C73B89658530E5E3 /* TranslationPreferences.swift in Sources */,
 				AF17C45D51F1ECBD2C93D932 /* TranslationRequestExecutor.swift in Sources */,
 				AAB9CD5E407CA327EB28D2CC /* TranslationService.swift in Sources */,
+				B4AC816E016B95719FF19D0B /* TranslationServiceFactory.swift in Sources */,
+				75E50B0B263DF2282CA76DCC /* TranslationServiceRegistry.swift in Sources */,
 				040028771CE6D4F557E78017 /* TranslationSettingsView.swift in Sources */,
 				A496775410FA792F0AD294AA /* VocabularyEntry.swift in Sources */,
 				E864564E9651FAD205CB102D /* VocabularyView.swift in Sources */,

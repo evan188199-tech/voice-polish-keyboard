@@ -69,7 +69,7 @@ struct SettingsView: View {
             Form {
                 Section("翻译") {
                     NavigationLink("翻译目标语言与服务") {
-                        TranslationSettingsView(serviceID: nil, serviceLabel: "当前没有启用的翻译服务")
+                        TranslationSettingsView(service: AppServices.shared.coordinator.translationService)
                     }
                 }
                 Section("繁简输出") {

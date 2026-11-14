@@ -3,11 +3,13 @@ import Network
 
 actor KeyboardBridgeServer {
     private var server: BridgeServer?
+    private let translationService: TranslationServiceRegistry
     // Main-actor object; bridge hops back with await on each call.
     nonisolated(unsafe) private weak var coordinator: VoiceSessionCoordinator?
 
-    init(coordinator: VoiceSessionCoordinator) {
+    init(coordinator: VoiceSessionCoordinator, translationService: TranslationServiceRegistry) {
         self.coordinator = coordinator
+        self.translationService = translationService
     }
 
     func start() {
@@ -58,7 +60,7 @@ actor KeyboardBridgeServer {
                 return
             }
             let targets = await TranslationPreferences.shared.targets
-            let reply = await TranslationBridgeHandler(service: DisabledTranslationService()).handle(payload, targets: targets)
+            let reply = await TranslationBridgeHandler(service: translationService).handle(payload, targets: targets)
             guard let encoded = try? JSONEncoder().encode(reply), let text = String(data: encoded, encoding: .utf8) else {
                 BridgeServer.send(response: WireResponse(requestID: message.requestID, response: .error("翻译响应无效")), over: connection)
                 return

@@ -44,6 +44,7 @@ final class VoiceSessionCoordinator: ObservableObject {
     private var appleTranscriber: AppleOnDeviceTranscriber?
 #endif
     private let polisher: TextPolishing = APITextPolisher()
+    let translationService = TranslationServiceRegistry()
     private let historyStore = DictationHistoryStore.shared
     private var bridgeServer: KeyboardBridgeServer?
     private var settings: AppSettings?
@@ -321,7 +322,7 @@ final class VoiceSessionCoordinator: ObservableObject {
             bindRecorderRouteCallbacks()
             currentInputName = recorder.currentInputName
             isInputReady = recorder.isInputReady
-            bridgeServer = KeyboardBridgeServer(coordinator: self)
+            bridgeServer = KeyboardBridgeServer(coordinator: self, translationService: translationService)
             await bridgeServer?.start()
             VoiceStageDiagnostics.record(.bridgeStartRequested)
             state = .ready
