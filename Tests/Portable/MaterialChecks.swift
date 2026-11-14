@@ -1,5 +1,16 @@
 import Foundation
 
+actor DelayedMaterialAdapter: MaterialReadOnlyAdapter {
+    private var pending: [String: CheckedContinuation<[ProductMaterial], Error>] = [:]
+    func materials(for account: MaterialAccount, now: Date) async throws -> [ProductMaterial] {
+        try await withCheckedThrowingContinuation { pending[account.id] = $0 }
+    }
+    func resolve(_ id: String) {
+        pending.removeValue(forKey: id)?.resume(returning: [ProductMaterial(accountID: id, displayName: "虚构内容")])
+    }
+    func hasPending(_ id: String) -> Bool { pending[id] != nil }
+}
+
 @MainActor enum MaterialChecks {
     static func run() async {
         let check = KeyboardChecks.check
@@ -52,5 +63,22 @@ import Foundation
               && !snapshot.isValid(accountID: "fixture-B", version: 3, now: now.addingTimeInterval(30)), "snapshot account/version/expiry gates")
         session.revoke()
         check(session.account == nil && session.privateTerms.isEmpty && session.materials.isEmpty, "revoke/logout removes all prototype cache")
+
+        let delayed = DelayedMaterialAdapter()
+        let isolated = PrivateMaterialSession(adapter: delayed)
+        let first = Task { await isolated.useDemo("fiction-A") }
+        while !(await delayed.hasPending("fiction-A")) { await Task.yield() }
+        let second = Task { await isolated.useDemo("fiction-B") }
+        while !(await delayed.hasPending("fiction-B")) { await Task.yield() }
+        await delayed.resolve("fiction-B"); await second.value
+        await delayed.resolve("fiction-A"); await first.value
+        check(isolated.account?.id == "fiction-B" && isolated.materials.allSatisfy { $0.accountID == "fiction-B" },
+              "late old account result cannot overwrite newer account")
+        let revoked = Task { await isolated.useDemo("fiction-C") }
+        while !(await delayed.hasPending("fiction-C")) { await Task.yield() }
+        isolated.revoke()
+        await delayed.resolve("fiction-C"); await revoked.value
+        check(isolated.account == nil && isolated.materials.isEmpty && isolated.privateTerms.isEmpty,
+              "late mock response cannot restore revoked account data")
     }
 }
