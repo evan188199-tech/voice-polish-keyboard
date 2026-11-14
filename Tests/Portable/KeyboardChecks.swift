@@ -43,7 +43,7 @@ actor MockKeyboardBridge: KeyboardBridgeServing {
                 recording = true
                 response = .ok(status: status())
             }
-        case .finish:
+        case .finish, .finishTranslation:
             if delayFinish { try await Task.sleep(nanoseconds: 60_000_000) }
             if recording {
                 recording = false
@@ -67,6 +67,21 @@ actor MockKeyboardBridge: KeyboardBridgeServing {
             response = .ok(status: status())
         }
         return WireResponse(requestID: UUID(), response: response)
+    }
+}
+
+actor PortableTranslationProvider: TextTranslating {
+    let fail: Bool
+    init(fail: Bool = false) { self.fail = fail }
+    var capability: TranslationCapability { get async {
+        TranslationCapability(serviceID: "fixture", serviceLabel: "mock", isAvailable: true,
+            supportedTargets: [.english], orderedTargets: [.english], failure: nil)
+    } }
+    func translate(_ request: TranslationRequest) async throws -> TranslationEvent {
+        try await Task.sleep(nanoseconds: 350_000_000)
+        if fail { throw TranslationFailure.offline }
+        return TranslationEvent(context: request.context, source: request.source,
+                                translation: "Translated.", failure: nil)
     }
 }
 
@@ -190,6 +205,78 @@ actor MockKeyboardBridge: KeyboardBridgeServing {
         await pause()
         check(reviewInsertions == ["明天去桂林", "第二段"], "confirmed draft inserts once before next queued result")
         reviewModel.disconnect()
+
+        let mixedBridge = MockKeyboardBridge()
+        let mixed = await makeModel(mixedBridge)
+        let translation = TranslationViewModel(service: PortableTranslationProvider(),
+            defaults: UserDefaults(suiteName: "integration-\(UUID())")!)
+        var mixedInsertions: [String] = []
+        mixed.onTextReady = { mixedInsertions.append($0) }
+        translation.onInsert = { mixedInsertions.append($0) }
+        await translation.appear(hasFullAccess: true, hostSessionID: UUID())
+        mixed.startTranslation(.english, translation: translation)
+        await pause(100)
+        check(mixed.isRecording, "translation selection starts one actual mock recording")
+        await mixed.toggleRecording()
+        let translationFinishCount = await mixedBridge.count(.finishTranslation)
+        check(translationFinishCount == 1, "translation capture is committed with its own bridge command")
+        await mixed.toggleRecording(); await mixed.toggleRecording()
+        await mixedBridge.complete(0, text: "你好")
+        await mixedBridge.complete(1, text: "下一段")
+        await pause(300)
+        check(mixedInsertions.isEmpty, "normal dictation waits while earlier translation is processing")
+        await pause(650)
+        check(mixedInsertions == ["Translated.", "下一段"], "translated result and dictation insert once in original order")
+        check(translation.lastEvent?.source == "你好", "translation retains ASR source for recovery")
+        translation.disappear(); mixed.disconnect()
+
+        let failedBridge = MockKeyboardBridge()
+        let failedModel = await makeModel(failedBridge)
+        let failedTranslation = TranslationViewModel(service: PortableTranslationProvider(fail: true),
+            defaults: UserDefaults(suiteName: "integration-fail-\(UUID())")!)
+        var failureInsertions: [String] = []
+        failedModel.onTextReady = { failureInsertions.append($0) }
+        failedTranslation.onInsert = { failureInsertions.append($0) }
+        await failedTranslation.appear(hasFullAccess: true, hostSessionID: UUID())
+        failedModel.startTranslation(.english, translation: failedTranslation)
+        await pause(100); await failedModel.toggleRecording()
+        await failedModel.toggleRecording(); await failedModel.toggleRecording()
+        await failedBridge.complete(0, text: "需要保留原文")
+        await failedBridge.complete(1, text: "后续听写")
+        await pause(1000)
+        check(failureInsertions == ["后续听写"], "failed translation preserves ordering without inserting source as translation")
+        check(failedTranslation.lastEvent?.source == "需要保留原文" && failedTranslation.lastEvent?.failure == .offline,
+              "failed translation keeps source and reports the failure")
+        failedTranslation.disappear(); failedModel.disconnect()
+
+        let cancelledBridge = MockKeyboardBridge()
+        let cancelledModel = await makeModel(cancelledBridge)
+        let cancelledTranslation = TranslationViewModel(service: PortableTranslationProvider(),
+            defaults: UserDefaults(suiteName: "integration-cancel-\(UUID())")!)
+        var cancelledInsertions: [String] = []
+        cancelledTranslation.onInsert = { cancelledInsertions.append($0) }
+        await cancelledTranslation.appear(hasFullAccess: true, hostSessionID: UUID())
+        cancelledModel.startTranslation(.english, translation: cancelledTranslation)
+        await pause(100); await cancelledModel.cancelRecording()
+        let cancelledCount = await cancelledBridge.count(.finishTranslation)
+        check(cancelledCount == 0 && cancelledInsertions.isEmpty, "cancelled voice translation never commits or inserts")
+        cancelledTranslation.disappear(); cancelledModel.disconnect()
+
+        let staleBridge = MockKeyboardBridge()
+        let staleModel = await makeModel(staleBridge)
+        let staleTranslation = TranslationViewModel(service: PortableTranslationProvider(),
+            defaults: UserDefaults(suiteName: "integration-stale-\(UUID())")!)
+        var staleInsertions: [String] = []
+        staleTranslation.onInsert = { staleInsertions.append($0) }
+        await staleTranslation.appear(hasFullAccess: true, hostSessionID: UUID())
+        staleModel.startTranslation(.english, translation: staleTranslation)
+        await pause(100); await staleModel.toggleRecording()
+        await staleBridge.complete(0, text: "旧会话原文")
+        await pause(300)
+        staleTranslation.disappear(); staleModel.disconnect()
+        await pause(500)
+        check(staleInsertions.isEmpty, "late translation after keyboard disappearance cannot insert")
+        check(staleTranslation.lastEvent?.source == "旧会话原文", "disappearing keyboard retains submitted translation source")
 
         var cursor = OrderedDeliveryCursor()
         check(!cursor.canDeliver(sequence: 2) && cursor.canDeliver(sequence: 1), "production ordered cursor blocks second result")

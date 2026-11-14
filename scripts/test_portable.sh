@@ -12,7 +12,7 @@ sources=(Shared/Constants.swift Shared/VoiceKeyboardCapture.swift Shared/PlaceNa
   Shared/Core/ChineseScriptConverter.swift Shared/Core/PolishMode.swift Shared/Core/OrderedDeliveryCursor.swift
   Shared/Core/SpokenCorrection.swift Shared/Core/FaithfulTextFormatter.swift Shared/Core/LocalTextProcessor.swift Shared/Core/TextPolishing.swift
   Tests/Portable/ContentChecks.swift
-  Shared/TranslationDraft.swift Shared/TranslationContentGuard.swift Shared/TranslationRequestExecutor.swift Keyboard/TranslationViewModel.swift
+  Shared/TranslationDraft.swift Shared/TranslationContentGuard.swift Shared/TranslationRequestExecutor.swift Keyboard/TranslationViewModel.swift Keyboard/BridgeTranslationService.swift
   Shared/Protocol/WireMessage.swift Keyboard/KeyboardBridgeClient.swift Keyboard/KeyboardViewModel.swift
   Tests/Portable/TransportStub.swift Tests/Portable/KeyboardChecks.swift)
 "$SWIFTC" -swift-version 6 -module-cache-path "$TEST_BUILD/cache" -I "$TEST_BUILD" -L "$TEST_BUILD" \

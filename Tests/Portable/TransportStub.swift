@@ -4,8 +4,9 @@ import Foundation
 actor BridgeClient {
     func connect() async -> Bool { false }
     func disconnect() async {}
-    func send(_ command: BridgeCommand, polishEnabled: Bool?, polishMode: String?,
-              chineseScript: String?, jobID: UUID?, clipboardEntries: [ClipboardEntry]?) async throws -> WireResponse {
+    func send(_ command: BridgeCommand, polishEnabled: Bool? = nil, polishMode: String? = nil,
+              chineseScript: String? = nil, jobID: UUID? = nil, clipboardEntries: [ClipboardEntry]? = nil,
+              translationPayload: TranslationBridgePayload? = nil, timeoutSeconds: Double = 4) async throws -> WireResponse {
         fatalError("Tests must inject a mock bridge")
     }
 }
