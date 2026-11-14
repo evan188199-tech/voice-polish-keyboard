@@ -9,10 +9,28 @@ struct CorrectionReviewProposal: Equatable, Sendable {
     let candidates: [String]
     let hint: String
 
+    /// A partial fallback for bridges without per-job review metadata. This can
+    /// only see text that survived upstream processing; it cannot establish that
+    /// an unmarked result is safe, or reconstruct earlier raw transcription.
+    static func mayNeedReview(_ text: String) -> Bool {
+        guard !isProtected(text) else { return false }
+        let direct = #"(?:^|[，,。；;]\s*)(?:把|将|將)[\p{Han}A-Za-z]{1,8}(?:改成|改为|改為|改做)[\p{Han}A-Za-z]{1,8}[。.!！]?\s*$"#
+        if text.range(of: direct, options: .regularExpression) != nil { return true }
+        let spelling = try! NSRegularExpression(pattern: #"(?:^|[，,。；;]\s*)([\p{Han}A-Za-z]{1,8})(?:是|係|系)([\p{Han}A-Za-z]{2,16})(?:的|嘅)([\p{Han}A-Za-z]{1,8})[。.!！]?\s*$"#)
+        guard let m = spelling.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let a = Range(m.range(at: 1), in: text), let b = Range(m.range(at: 2), in: text),
+              let c = Range(m.range(at: 3), in: text) else { return false }
+        let target = String(text[a]), example = String(text[b]), alternative = String(text[c])
+        return target.count == alternative.count && example.contains(alternative)
+
+    }
+    private static func isProtected(_ text: String) -> Bool {
+        text.contains("`") || text.contains("/") || text.contains("\\") || text.contains("{") || text.contains("}") || text.contains("=") || text.contains("\"") || text.contains("'") || text.contains("“") || text.contains("「") || text.contains("『")
+    }
     static func make(original: String) -> CorrectionReviewProposal {
         let fallback = CorrectionReviewProposal(original: original, draft: nil, target: nil, candidates: [],
                                                 hint: "无法确定纠错目标；可手动编辑、保留原文或取消。")
-        guard !FaithfulTextFormatter.isProtected(original),
+        guard !isProtected(original),
               !["解释", "解釋", "引用", "逐字", "原话", "原話", "他说", "他說", "佢話", "不要改", "唔好改"].contains(where: original.contains) else { return fallback }
         let direct = try! NSRegularExpression(pattern: #"(?:^|[，,。；;]\s*)(?:把|将|將)([\p{Han}A-Za-z]{1,8})(?:改成|改为|改為|改做)([\p{Han}A-Za-z]{1,8})[。.!！]?\s*$"#)
         let spelling = try! NSRegularExpression(pattern: #"(?:^|[，,。；;]\s*)([\p{Han}A-Za-z]{1,8})(?:是|係|系)([\p{Han}A-Za-z]{2,16})(?:的|嘅)([\p{Han}A-Za-z]{1,8})[。.!！]?\s*$"#)

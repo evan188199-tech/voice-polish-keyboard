@@ -230,6 +230,55 @@ actor PortableTranslationProvider: TextTranslating {
         check(attempts == 1 && queued == 1, "lost finish reply never resubmits committed audio")
         lost.disconnect()
 
+        // Partial keyboard fallback: the raw correction phrase must still be in
+        // the returned text. A per-job bridge signal does not exist yet.
+        let correctionBridge = MockKeyboardBridge()
+        let correctionModel = await makeModel(correctionBridge)
+        var correctionOutputs: [String] = []
+        correctionModel.canExplicitlyInsert = { true }
+        correctionModel.onTextReady = { correctionOutputs.append($0) }
+        correctionModel.onCaptureDestination = { _ in }
+        correctionModel.onDeliverDestination = { _, text in correctionOutputs.append(text); return true }
+        await correctionModel.toggleRecording(); await correctionModel.toggleRecording()
+        await correctionModel.toggleRecording(); await correctionModel.toggleRecording()
+        await correctionBridge.complete(0, text: "明天联系小明，把小明改成晓明。")
+        await correctionBridge.complete(1, text: "普通后续。")
+        await pause(650)
+        let correctionQueued = await correctionBridge.jobCount()
+        check(correctionModel.correctionReview != nil && correctionOutputs.isEmpty && correctionQueued == 1,
+              "recognizable raw correction opens review and holds later jobs")
+        correctionModel.chooseCorrection("晓明")
+        correctionModel.useCorrection(); correctionModel.useCorrection()
+        await pause(500)
+        check(correctionOutputs == ["明天联系晓明。", "普通后续。"], "explicit correction inserts once and releases next result in order")
+        correctionModel.disconnect()
+
+        let legacyCorrectionBridge = MockKeyboardBridge()
+        await legacyCorrectionBridge.configure(legacyText: "明天联系小明，把小明改成晓明。")
+        let legacyCorrection = await makeModel(legacyCorrectionBridge)
+        var legacyReviewInserted: [String] = []
+        legacyCorrection.onDeliverDestination = { _, text in legacyReviewInserted.append(text); return true }
+        await legacyCorrection.toggleRecording(); await legacyCorrection.toggleRecording()
+        check(legacyCorrection.correctionReview != nil && legacyReviewInserted.isEmpty,
+              "legacy immediate correction also enters review before delivery")
+        legacyCorrection.cancelCorrection(); legacyCorrection.disconnect()
+
+        let unknownBridge = MockKeyboardBridge()
+        let unknownModel = await makeModel(unknownBridge)
+        var unknownOutputs: [String] = []
+        unknownModel.canExplicitlyInsert = { false }
+        unknownModel.onTextReady = { unknownOutputs.append($0) }
+        await unknownModel.toggleRecording(); await unknownModel.toggleRecording()
+        await unknownBridge.complete(0, text: "小明是黄晓明的晓明。")
+        await pause(600)
+        check(unknownModel.correctionReview?.proposal?.draft == nil && unknownOutputs.isEmpty,
+              "missing target stays in review without invented text")
+        unknownModel.chooseCorrectionOriginal(); unknownModel.useCorrection()
+        check(unknownOutputs.isEmpty && unknownModel.correctionReview != nil, "unavailable explicit destination retains review")
+        unknownModel.cancelCorrection(); unknownModel.useCorrection()
+        check(unknownModel.correctionReview == nil && unknownOutputs.isEmpty, "cancel invalidates old review")
+        unknownModel.disconnect()
+
         let reviewBridge = MockKeyboardBridge()
         await reviewBridge.configure(placeSuggestions: true)
         let reviewModel = await makeModel(reviewBridge)
