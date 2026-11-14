@@ -4,6 +4,7 @@ import UIKit
 struct KeyboardView: View {
     @ObservedObject var model: KeyboardViewModel
     @ObservedObject var translation: TranslationViewModel
+    @ObservedObject var privateReferences: PrivateReferenceSearchModel
     let onInsert: (String) -> Void
     let onDelete: () -> Void
     let onReturn: () -> Void
@@ -62,6 +63,7 @@ struct KeyboardView: View {
         .background(Color(uiColor: .systemGroupedBackground))
         .simultaneousGesture(pageSwipe, including: model.canSwitchPage && !translationTracking ? .all : .none)
         .onChange(of: model.appearance) { _, _ in page = .voice }
+        .onChange(of: model.isConnected) { _, connected in if !connected { privateReferences.close() } }
         .onChange(of: model.isRecording) { _, isRecording in
             // Keep the user on the voice page while a hold-to-record gesture is active.
             if isRecording {
@@ -82,7 +84,9 @@ struct KeyboardView: View {
         VStack(spacing: 0) {
             voiceToolbar
             Spacer(minLength: 4)
-            if translation.showPreview && model.canSwitchPage {
+            if privateReferences.isOpen && model.canSwitchPage {
+                privateReferenceContent
+            } else if translation.showPreview && model.canSwitchPage {
                 TranslationPreviewView(model: translation, onEditSource: { translation.isEditingSource = true; page = .abc },
                     onPasteSource: { if let value = UIPasteboard.general.string { translation.appendSource(value) } },
                     onClose: { translation.showPreview = false; translation.isEditingSource = false })
@@ -133,6 +137,29 @@ struct KeyboardView: View {
             .accessibilityIdentifier("voice.queueStatus")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var privateReferenceContent: some View {
+        VStack(spacing: 4) {
+            HStack {
+                Text("私人词汇与路线").font(.caption.weight(.semibold))
+                Spacer()
+                Button("关闭") { privateReferences.close() }.frame(minHeight: 44)
+            }
+            Text(privateReferences.message).font(.caption2).foregroundStyle(.secondary)
+            HStack {
+                Text(privateReferences.query.isEmpty ? "尚无搜索内容" : privateReferences.query)
+                    .font(.caption).lineLimit(1)
+                Button("输入搜索") { privateReferences.isEditing = true; page = .abc }.frame(minHeight: 44)
+            }
+            ScrollView {
+                ForEach(privateReferences.results) { item in
+                    Button(item.title) {
+                        if let text = privateReferences.choose(item.id) { onInsert(text) }
+                    }.frame(minHeight: 44)
+                }
+            }
+        }
     }
 
     private func placeReviewContent(_ review: PlaceReviewDraft) -> some View {
@@ -215,7 +242,8 @@ struct KeyboardView: View {
                     }.disabled(model.askFollowUpArmed)
                     Button("新问答") { Task { await model.clearAskConversation() } }
                 }
-                Button("翻译与原文恢复") { translation.showPreview = true }
+                Button("私人词汇与路线（未连接）") { translation.showPreview = false; translation.isEditingSource = false; privateReferences.open() }
+                Button("翻译与原文恢复") { privateReferences.close(); translation.showPreview = true }
                 Button("打开主应用") { onActivateSession() }
             } label: {
                 Image(systemName: "ellipsis")
@@ -447,7 +475,8 @@ struct KeyboardView: View {
                 }
             }
             characterKey("回车", accessibilityLabel: "回车，遵循当前应用行为", style: .returnKey) {
-                if translation.isEditingSource { requestInsertion("\n") } else { requestAction(onReturn) }
+                if privateReferences.isEditing { privateReferences.isEditing = false; page = .voice }
+                else if translation.isEditingSource { requestInsertion("\n") } else { requestAction(onReturn) }
             }
             .frame(width: 64)
         }
@@ -493,7 +522,11 @@ struct KeyboardView: View {
     }
 
     private var continuousDeleteButton: some View {
-        ContinuousDeleteKey { if translation.isEditingSource { translation.deleteSourceBackward() } else { requestAction(onDelete) } }
+        ContinuousDeleteKey {
+            if privateReferences.isEditing { privateReferences.deleteBackward() }
+            else if translation.isEditingSource { translation.deleteSourceBackward() }
+            else { requestAction(onDelete) }
+        }
     }
 
     // MARK: - Shared key chrome
@@ -531,7 +564,9 @@ struct KeyboardView: View {
     }
 
     private func requestInsertion(_ text: String) {
-        if translation.isEditingSource { translation.appendSource(text) } else { requestAction { onInsert(text) } }
+        if privateReferences.isEditing { privateReferences.append(text) }
+        else if translation.isEditingSource { translation.appendSource(text) }
+        else { requestAction { onInsert(text) } }
     }
 
     private func requestAction(_ action: @escaping () -> Void) {

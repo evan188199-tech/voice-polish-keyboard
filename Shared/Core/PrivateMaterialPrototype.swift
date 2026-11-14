@@ -187,6 +187,21 @@ struct MaterialSelection: Equatable, Sendable {
         importPreviews[preview.id] = (account.id, generation, preview)
         return preview
     }
+    /// No production caller or credential is configured; the reader is injected.
+    func previewNotion(sourceID: UUID, fields: [NotionPreviewField], reader: NotionPrivatePreviewReader) async throws -> TermImportPreview {
+        guard let account, account.isDemo else { throw MaterialPrototypeError.disconnected }
+        let epoch = generation
+        let preview: TermImportPreview
+        do { preview = try await reader.preview(sourceID: sourceID, fields: fields) }
+        catch NotionPreviewError.permission {
+            if generation == epoch { clear(); status = "来源不可访问，已关闭本次会话；请重新核验授权。" }
+            throw NotionPreviewError.permission
+        }
+        guard generation == epoch, self.account == account else { throw MaterialPrototypeError.wrongAccount }
+        importPreviews.removeAll()
+        importPreviews[preview.id] = (account.id, generation, preview)
+        return preview
+    }
     func confirmImport(_ preview: TermImportPreview, selected: Set<UUID>, expectedAccount: String, reviewed: Bool = false) throws {
         guard account?.id == expectedAccount else { throw MaterialPrototypeError.wrongAccount }
         guard reviewed else { throw MaterialPrototypeError.reviewRequired }
@@ -200,6 +215,19 @@ struct MaterialSelection: Equatable, Sendable {
         importPreviews[preview.id] = nil
         let chosen = preview.candidates.filter { selected.contains($0.id) }
         for term in chosen where !privateTerms.contains(where: { $0.term == term.term && $0.kind == term.kind }) { privateTerms.append(term) }
+    }
+    /// Installs only data from the user-chosen local index, while the originating
+    /// account and session remain unchanged. It never writes to a host document.
+    func restoreLocalTerms(_ items: [PrivateIndexItem], expectedAccount: String, expectedVersion: Int) throws {
+        guard account?.id == expectedAccount, cacheVersion == expectedVersion else { throw MaterialPrototypeError.wrongAccount }
+        let rows: [[String: String]] = items.map { item in
+            let kind: String = item.kind == .route ? "privateRoute" : (item.kind == .place ? "place" : "general")
+            return ["term": item.title, "kind": kind]
+        }
+        let data = try JSONSerialization.data(withJSONObject: ["terms": rows])
+        let checked = try TermImportPreview.parse(data)
+        guard checked.rejectedCount == 0, checked.candidates.count == items.count else { throw MaterialPrototypeError.invalidImport }
+        privateTerms = checked.candidates
     }
     func searchTerms(_ query: String) -> [PrivateTermCandidate] {
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)

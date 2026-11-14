@@ -460,6 +460,8 @@ actor PortableTranslationProvider: TextTranslating {
         await ContentChecks.run()
         await PlaceChecks.run()
         await MaterialChecks.run()
+        await PrivateIndexChecks.run()
+        await NotionPreviewChecks.run()
         print("Keyboard logic checks completed (Apple frameworks replaced; no iOS UI/audio validation).")
     }
 }

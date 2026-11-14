@@ -10,6 +10,10 @@ struct PrivateMaterialPrototypeView: View {
     @State private var importAccount = ""
     @State private var importVersion = 0
     @State private var search = ""
+    @State private var indexCoordinator: PrivateIndexCoordinator?
+    @State private var indexBusy = false
+    @State private var pendingDeletion: PrivateIndexScope?
+    @State private var viewActive = false
     @State private var reviewedImport = false
     @State private var confirmedMaterial: [UUID: MaterialSelection] = [:]
     @State private var draftMaterial: ProductMaterial?
@@ -25,10 +29,11 @@ struct PrivateMaterialPrototypeView: View {
                 Text(session.status)
                 Button("真实账号（尚未接入）") { session.connectProduction() }
                 HStack {
-                    Button("演示工作区 A") { resetUI(); Task { await session.useDemo("demo-A") } }
-                    Button("演示工作区 B") { resetUI(); Task { await session.useDemo("demo-B") } }
+                    Button("演示工作区 A") { switchDemo("demo-A") }.disabled(indexBusy)
+                    Button("演示工作区 B") { switchDemo("demo-B") }.disabled(indexBusy)
                 }
-                Button("注销 / 撤权并清缓存", role: .destructive) { resetUI(); session.logout() }
+                Button("注销 / 撤权并删除本机索引", role: .destructive) { revokeLocalIndex() }.disabled(indexBusy)
+                if pendingDeletion != nil { Button("重试删除本机索引") { retryIndexDeletion() }.disabled(indexBusy) }
                 Text(session.keyboardAvailability).font(.caption).foregroundStyle(.secondary)
             }
             Section("本机搜索") {
@@ -55,6 +60,12 @@ struct PrivateMaterialPrototypeView: View {
                         } catch { message = error.localizedDescription }
                     }.disabled(!reviewedImport || selected.isEmpty)
                 }
+                HStack {
+                    Button("保存已确认词汇到本机") { saveLocalIndex() }
+                    Button("载入本机词汇") { loadLocalIndex() }
+                }.disabled(indexBusy || session.account == nil)
+                Text("手动保存到本机受保护索引；不默认同步。注销/撤权会尝试删除本账号索引。切号只清内存，不删除另一个已保存账号。")
+                    .font(.caption).foregroundStyle(.secondary)
                 ForEach(session.searchTerms(search)) { term in
                     HStack {
                         Text(term.term).font(.caption)
@@ -134,7 +145,11 @@ struct PrivateMaterialPrototypeView: View {
             Text("复制不是发送。到宿主中自行粘贴并选择收件人；有些应用不接受图片。不会跨设备同步。")
         }
         .sheet(item: $share) { payload in MaterialShareSheet(items: payload.items) }
-        .onDisappear { resetUI(); session.logout() }
+        .onAppear { viewActive = true }
+        .onDisappear {
+            viewActive = false; resetUI(); session.logout()
+            if let indexCoordinator { Task { await indexCoordinator.deactivate() } }
+        }
     }
     private func demoImage() -> UIImage {
         // Original fixed-size placeholder, not a real product image or remote asset.
@@ -153,6 +168,87 @@ struct PrivateMaterialPrototypeView: View {
         ownedPasteboardChange = nil
     }
     @State private var ownedPasteboardChange: Int?
+    private func switchDemo(_ id: String) {
+        guard !indexBusy else { return }
+        resetUI(); session.logout(); indexBusy = true
+        Task {
+            defer { indexBusy = false }
+            if let indexCoordinator { await indexCoordinator.deactivate() }
+            guard viewActive else { return }
+            await session.useDemo(id)
+        }
+    }
+    private func localScope() -> PrivateIndexScope? {
+        guard let account = session.account, account.isDemo else { return nil }
+        return PrivateIndexScope(accountID: account.id, sourceID: "user-selected-local-index")
+    }
+    private func localIndex() throws -> PrivateIndexCoordinator {
+        if let indexCoordinator { return indexCoordinator }
+        let base = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                               appropriateFor: nil, create: true)
+        let directory = base.appendingPathComponent("ProtectedPrivateIndex", isDirectory: true)
+        let coordinator = PrivateIndexCoordinator(storage: ProtectedPrivateIndexStorage(directory: directory))
+        indexCoordinator = coordinator
+        return coordinator
+    }
+    private func saveLocalIndex() {
+        guard let scope = localScope(), !indexBusy else { return }
+        let version = session.cacheVersion
+        let items = session.privateTerms.map { term in
+            let kind: PrivateIndexItem.Kind = term.kind == .privateRoute ? .route : (term.kind == .place ? .place : .term)
+            return PrivateIndexItem(id: term.id, kind: kind, title: term.term)
+        }
+        indexBusy = true
+        Task {
+            defer { indexBusy = false }
+            do {
+                let index = try localIndex()
+                try await index.activate(scope)
+                guard session.account?.id == scope.accountID, session.cacheVersion == version else { throw MaterialPrototypeError.wrongAccount }
+                try await index.replace(items, expectedScope: scope)
+                guard session.account?.id == scope.accountID, session.cacheVersion == version else {
+                    await index.deactivate()
+                    throw MaterialPrototypeError.wrongAccount
+                }
+                message = "已保存本机受保护索引；不会自动同步。"
+            } catch { message = "本机索引保存失败或会话已变化；请保持设备解锁后重试。" }
+        }
+    }
+    private func loadLocalIndex() {
+        guard let scope = localScope(), !indexBusy else { return }
+        let version = session.cacheVersion
+        indexBusy = true
+        Task {
+            defer { indexBusy = false }
+            do {
+                let index = try localIndex()
+                try await index.activate(scope)
+                let items = try await index.list(expectedScope: scope)
+                try session.restoreLocalTerms(items, expectedAccount: scope.accountID, expectedVersion: version)
+                message = "已载入当前账号的本机词汇。"
+            } catch { message = "无法载入本机索引或会话已变化。" }
+        }
+    }
+    private func revokeLocalIndex() {
+        guard !indexBusy else { return }
+        let scope = localScope()
+        resetUI(); session.logout()
+        guard let scope else { return }
+        pendingDeletion = scope; retryIndexDeletion()
+    }
+    private func retryIndexDeletion() {
+        guard let scope = pendingDeletion, !indexBusy else { return }
+        indexBusy = true
+        Task {
+            defer { indexBusy = false }
+            do {
+                let index = try localIndex()
+                try await index.erase(scope)
+                pendingDeletion = nil
+                message = "已删除当前账号的本机索引及密钥。"
+            } catch { message = "本机删除未完成；请解锁设备并重试，不要视为已删除。" }
+        }
+    }
     private func copyLocalText(_ text: String) {
         UIPasteboard.general.setItems([[UTType.utf8PlainText.identifier: text,
                                         ClipboardHistoryPolicy.transientPrivateType: Data([1])]],
