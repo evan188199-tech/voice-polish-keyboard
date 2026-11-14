@@ -72,6 +72,10 @@ enum FaithfulTextFormatter {
         }
     }
 
+    static func preservesNumbers(_ candidate: String, source: String) -> Bool {
+        numericLiterals(candidate) == numericLiterals(source)
+    }
+
     private static func signature(_ text: String) -> String {
         let withoutNumbers = text.replacingOccurrences(of: #"(?m)^\s*[1-9][.)、][ \t]+"#, with: "", options: .regularExpression)
         return String(withoutNumbers.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) })
@@ -84,9 +88,11 @@ struct DictationTextPreparation: Sendable {
     let strictLayout: Bool
     let correctionNeedsConfirmation: Bool
     let literalContent: Bool
+    private let requiresNumericFidelity: Bool
 
     init(_ text: String, mode: PolishMode) {
         original = text
+        requiresNumericFidelity = mode != .askLLM
         let correction = SpokenCorrection.process(text, mode: mode)
         body = FaithfulTextFormatter.format(correction.body, mode: mode)
         correctionNeedsConfirmation = correction.needsConfirmation
@@ -97,6 +103,7 @@ struct DictationTextPreparation: Sendable {
     func accept(_ candidate: String) -> Bool {
         !candidate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && (!literalContent || candidate == body)
+            && (!requiresNumericFidelity || FaithfulTextFormatter.preservesNumbers(candidate, source: body))
             && (!strictLayout || FaithfulTextFormatter.preservesContent(candidate, source: body))
     }
 }

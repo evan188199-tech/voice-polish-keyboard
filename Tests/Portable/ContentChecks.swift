@@ -55,6 +55,11 @@ final class FixtureURLProtocol: URLProtocol, @unchecked Sendable {
             let candidate = source.replacingOccurrences(of: original, with: altered)
             check(!DictationTextPreparation(source, mode: .rewrite).accept(candidate), "strict formatting rejects numeric punctuation mutation")
         }
+        let shortNumeric = DictationTextPreparation("温度-3.5度。", mode: .rewrite)
+        check(!shortNumeric.accept("温度3.5度。") && !shortNumeric.accept("温度35度。"),
+              "short dictation also rejects changed signs and decimal values")
+        let questionWithNumber = DictationTextPreparation("1+1等于多少？", mode: .askLLM)
+        check(questionWithNumber.accept("2"), "explicit ask mode can return an answer containing different numbers")
         let hk = ChineseScriptConverter.convert(prepared.body, direction: .toTraditional)
         check(hk.contains("聯繫") && hk.contains("3000"), "Hong Kong script path preserves numeric content")
 
