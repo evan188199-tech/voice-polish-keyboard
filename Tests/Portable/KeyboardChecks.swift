@@ -11,6 +11,10 @@ actor MockKeyboardBridge: KeyboardBridgeServing {
     private var failFinish = false
     private var placeSuggestions = false
     private var legacyText: String?
+    private var wireRaw: String?
+    private var wireReview: Bool?
+    private var holdFinishReply = false
+    private var pendingFinishReply: CheckedContinuation<Void, Never>?
     private var holdStatus = false
     private var pendingStatus: CheckedContinuation<Void, Never>?
 
@@ -25,6 +29,10 @@ actor MockKeyboardBridge: KeyboardBridgeServing {
         self.placeSuggestions = placeSuggestions
         self.legacyText = legacyText
     }
+    func setWireReview(raw: String?, required: Bool?) { wireRaw = raw; wireReview = required }
+    func holdNextFinishReply() { holdFinishReply = true }
+    func isFinishReplyHeld() -> Bool { pendingFinishReply != nil }
+    func releaseFinishReply() { pendingFinishReply?.resume(); pendingFinishReply = nil }
     func holdNextStatus() { holdStatus = true }
     func isStatusHeld() -> Bool { pendingStatus != nil }
     func releaseStatus() { pendingStatus?.resume(); pendingStatus = nil }
@@ -63,6 +71,7 @@ actor MockKeyboardBridge: KeyboardBridgeServing {
                     let id = UUID()
                     jobs.append((id, nil))
                     if failFinish { throw URLError(.networkConnectionLost) }
+                    if holdFinishReply { holdFinishReply = false; await withCheckedContinuation { pendingFinishReply = $0 } }
                     response = .ok(status: status(), jobID: id)
                 }
             } else { response = .error("未录音", code: .notRecording) }
@@ -77,7 +86,7 @@ actor MockKeyboardBridge: KeyboardBridgeServing {
                 if holdStatus { holdStatus = false; await withCheckedContinuation { pendingStatus = $0 } }
                 let candidates = placeSuggestions ? PlaceNameMatcher.suggestions(in: text,
                     entries: [PlaceNameEntry(name: "桂林", aliases: ["贵林"])], script: .simplified) : []
-                response = .text(text, status: status(), jobID: id, placeSuggestions: candidates)
+                response = .text(text, status: status(), jobID: id, placeSuggestions: candidates, rawTranscript: wireRaw, correctionReviewRequired: wireReview)
             } else { response = .ok(status: status()) }
         default:
             response = .ok(status: status())
@@ -274,6 +283,34 @@ actor PortableTranslationProvider: TextTranslating {
         if let id = rawFixture.correctionReviewID { rawFixture.cancelCorrection(reviewID: id) }
         rawFixture.disconnect()
 
+        // Unlike the test-only injected policy above, these exercise the actual
+        // BridgeResponse properties and the production receiver directly.
+        let actualWireBridge = MockKeyboardBridge()
+        let actualWireModel = KeyboardViewModel(client: actualWireBridge, defaults: UserDefaults(suiteName: "actual-wire-\(UUID())")!)
+        var actualWireOutputs: [String] = []
+        actualWireModel.onCaptureDestination = { _ in }
+        actualWireModel.onDeliverDestination = { _, text in actualWireOutputs.append(text); return true }
+        actualWireModel.onTextReady = { actualWireOutputs.append($0) }
+        actualWireModel.canExplicitlyInsert = { true }
+        actualWireModel.appear(); await actualWireModel.connect()
+        let actualRaw = "明天联系小明，把小明改成晓明。"
+        await actualWireBridge.setWireReview(raw: actualRaw, required: true)
+        await actualWireModel.toggleRecording(); await actualWireModel.toggleRecording()
+        await actualWireBridge.complete(0, text: "主应用格式结果")
+        await pause(650)
+        check(actualWireModel.correctionReview?.restoreOriginal() == actualRaw && !actualWireModel.correctionMetadataUnknown && actualWireOutputs.isEmpty,
+              "real typed BridgeResponse delivers its job-bound raw text into review")
+        let actualReviewID = actualWireModel.correctionReviewID!
+        actualWireModel.chooseCorrection("晓明", reviewID: actualReviewID)
+        actualWireModel.useCorrection(reviewID: actualReviewID); actualWireModel.useCorrection(reviewID: actualReviewID)
+        check(actualWireOutputs == ["明天联系晓明。"], "real typed review confirmation inserts once")
+        await actualWireBridge.setWireReview(raw: "普通听写", required: false)
+        await actualWireModel.toggleRecording(); await actualWireModel.toggleRecording()
+        await actualWireBridge.complete(0, text: "普通听写")
+        await pause(650)
+        check(actualWireOutputs == ["明天联系晓明。", "普通听写"], "real typed false marker permits ordinary dictation")
+        actualWireModel.disconnect()
+
         let correctionBridge = MockKeyboardBridge()
         let correctionModel = await makeModel(correctionBridge)
         var correctionOutputs: [String] = []
@@ -422,6 +459,30 @@ actor PortableTranslationProvider: TextTranslating {
         check(mixedInsertions == ["Translated.", "下一段"], "translated result and dictation insert once in original order")
         check(translation.lastEvent?.source == "你好", "translation retains ASR source for recovery")
         translation.disappear(); mixed.disconnect()
+
+        // The host can enqueue the translation before its finish response is
+        // delivered. Closing the keyboard in that window must not relabel the
+        // untranslated source as ordinary dictation after reopening.
+        let lateFinishBridge = MockKeyboardBridge()
+        let lateFinishModel = await makeModel(lateFinishBridge)
+        lateFinishModel.testCorrectionDisposition = nil // actual pre-contract receiver
+        let lateFinishTranslation = TranslationViewModel(service: PortableTranslationProvider(),
+            defaults: UserDefaults(suiteName: "late-finish-translation-\(UUID())")!)
+        await lateFinishTranslation.appear(hasFullAccess: true, hostSessionID: UUID())
+        lateFinishModel.startTranslation(.english, translation: lateFinishTranslation)
+        await pause(100)
+        await lateFinishBridge.holdNextFinishReply()
+        let lateFinishTask = Task { await lateFinishModel.toggleRecording() }
+        for _ in 0..<100 { if await lateFinishBridge.isFinishReplyHeld() { break }; await pause(10) }
+        let finishWasHeld = await lateFinishBridge.isFinishReplyHeld()
+        check(finishWasHeld, "translation finish fixture holds acknowledgment after enqueue")
+        lateFinishTranslation.disappear(); lateFinishModel.disconnect()
+        await lateFinishBridge.releaseFinishReply(); await lateFinishTask.value
+        await lateFinishBridge.complete(0, text: "未翻译的虚构原文")
+        lateFinishModel.appear(); await lateFinishModel.connect(); await pause(650)
+        check(lateFinishModel.heldResult == "未翻译的虚构原文" && lateFinishModel.correctionReview == nil,
+              "late finish acknowledgment retains translation source as source rather than dictation")
+        lateFinishModel.disconnect()
 
         let failedBridge = MockKeyboardBridge()
         let failedModel = await makeModel(failedBridge)

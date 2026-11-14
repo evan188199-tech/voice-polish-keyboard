@@ -63,25 +63,21 @@ final class FixtureURLProtocol: URLProtocol, @unchecked Sendable {
         let hk = ChineseScriptConverter.convert(prepared.body, direction: .toTraditional)
         check(hk.contains("聯繫") && hk.contains("3000"), "Hong Kong script path preserves numeric content")
 
-        let correctionFixtures: [(String, String)] = [
-            ("明天联系小明，小明是黄晓明的晓明。", "明天联系晓明。"),
-            ("聽日搵小明，小明係黃曉明嘅曉明。", "聽日搵曉明。"),
-            ("明天联系李丽，李丽是王丽丽的丽丽。", "明天联系丽丽。"),
-            ("不是明天，是后天交货。", "后天交货。")
-        ]
-        for (raw, expected) in correctionFixtures {
+        let temporal = SpokenCorrection.process("不是明天，是后天交货。", mode: .rewrite)
+        check(temporal.body == "后天交货。", "bounded temporal correction remains supported")
+        for raw in ["明天联系小明，小明是黄晓明的晓明。", "聽日搵小明，小明係黃曉明嘅曉明。", "明天联系李丽，李丽是王丽丽的丽丽。"] {
             let result = SpokenCorrection.process(raw, mode: .rewrite)
-            check(result.body == expected && result.original == raw, "scoped spoken correction: \(raw.prefix(12))")
-            check(SpokenCorrection.process(result.body, mode: .rewrite).body == result.body, "spoken correction is idempotent")
+            check(result.body == raw && result.original == raw && result.needsConfirmation,
+                  "spelling evidence requires review without changing source")
         }
         for text in ["发给张伟，伟是伟大的伟。", "小明是黄晓明的晓明", "他解释说，小明是黄晓明的晓明", "明天联系小明和小明，小明是黄晓明的晓明", "他说‘小明是黄晓明的晓明’", "明天联系小明，小明不是黄晓明的晓明", "明天联系小明，小明是黄晓明的明", "不是所有任务都取消", "send /tmp/x to 小明，小明是黄晓明的晓明", "不要修改已插入的宿主"] {
             check(SpokenCorrection.process(text, mode: .rewrite).body == text, "ambiguous/quoted/negative/no-target correction is preserved")
         }
         let corrected = DictationTextPreparation("明天联系小明，小明是黄晓明的晓明。", mode: .rewrite)
-        check(corrected.body == "明天联系晓明。" && !corrected.accept(corrected.original), "correction explanation cannot return through polishing")
+        check(corrected.body == corrected.original && corrected.correctionNeedsConfirmation, "uncertain spelling explanation is preserved for review")
         let standalone = DictationTextPreparation("小明是黄晓明的晓明", mode: .rewrite)
         check(standalone.correctionNeedsConfirmation && standalone.body == standalone.original, "standalone correction needs explicit target; no host access")
-        check(ChineseScriptConverter.convert(corrected.body, direction: .toTraditional) == "明天聯繫曉明。", "spoken correction supports traditional output")
+        check(ChineseScriptConverter.convert(corrected.body, direction: .toTraditional).contains("小明"), "review source supports traditional output")
 
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [FixtureURLProtocol.self]

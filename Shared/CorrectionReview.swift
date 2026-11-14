@@ -110,9 +110,8 @@ struct CorrectionReviewState: Sendable {
     func restoreOriginal() -> String { original }
 }
 
-/// Decode only the agreed flat fields from an encoded BridgeResponse. Current
-/// builds whose BridgeResponse does not contain them always fail closed. When
-/// the actual protocol diff is integrated, prefer direct typed access.
+/// Decision for a successful, job-bound ordinary dictation result. An absent
+/// marker on an older bridge is unknown and never authorizes auto-delivery.
 enum CorrectionWireDisposition: Equatable, Sendable {
     case normal
     case review(rawTranscript: String)
@@ -120,21 +119,15 @@ enum CorrectionWireDisposition: Equatable, Sendable {
     /// Internal queue tag; never decoded from correction metadata.
     case translationSource
 
-    private struct Fields: Decodable {
-        let rawTranscript: String?
-        let correctionReviewRequired: Bool?
-    }
-    static func classify(jobID: UUID?, text: String, encodedResponse: Data?) -> CorrectionWireDisposition {
+    static func classify(jobID: UUID?, text: String, rawTranscript: String?, correctionReviewRequired: Bool?) -> CorrectionWireDisposition {
         guard jobID != nil, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              let encodedResponse, let fields = try? JSONDecoder().decode(Fields.self, from: encodedResponse),
-              let required = fields.correctionReviewRequired else { return .unknown }
-        if let raw = fields.rawTranscript, raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return .unknown }
+              let required = correctionReviewRequired else { return .unknown }
+        if let raw = rawTranscript, raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return .unknown }
         if required {
-            guard let raw = fields.rawTranscript else { return .unknown }
+            guard let raw = rawTranscript else { return .unknown }
             return .review(rawTranscript: raw)
         }
-        // A recognizable correction with a negative marker is inconsistent.
-        if let raw = fields.rawTranscript, CorrectionReviewProposal.mayNeedReview(raw) { return .unknown }
+        if let raw = rawTranscript, CorrectionReviewProposal.mayNeedReview(raw) { return .unknown }
         if CorrectionReviewProposal.mayNeedReview(text) { return .unknown }
         return .normal
     }

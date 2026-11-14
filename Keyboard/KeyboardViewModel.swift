@@ -42,6 +42,8 @@ final class KeyboardViewModel: ObservableObject {
     private weak var translationModel: TranslationViewModel?
     private var activeTranslation: TranslationContext?
     private var translationJobs: [UUID: UUID] = [:]
+    // Job IDs whose translation session ended; their results are source only.
+    private var interruptedTranslationJobs = Set<UUID>()
     private var translationDeliveryPending: UUID?
     @Published private(set) var translationRecoveryPending = false
     private var activeDestination: UUID?
@@ -145,6 +147,7 @@ final class KeyboardViewModel: ObservableObject {
         submittedHere.removeAll()
         if let context = activeTranslation { translationModel?.cancel(context.id) }
         activeTranslation = nil
+        interruptedTranslationJobs.formUnion(translationJobs.keys)
         translationJobs.removeAll()
         if let id = activeDestination { onAbandonDestination?(id) }
         for id in jobDestinations.values { onAbandonDestination?(id) }
@@ -255,9 +258,20 @@ final class KeyboardViewModel: ObservableObject {
         let epoch = appearance
         stopTimer()
         statusText = "正在提交…"
+        let wasTranslation = activeTranslation != nil
         do {
-            let response = try await client.send(activeTranslation == nil ? .finish : .finishTranslation)
-            guard visible, appearance == epoch else { return }
+            let response = try await client.send(wasTranslation ? .finishTranslation : .finish)
+            guard visible, appearance == epoch else {
+                // The host may already have queued audio before this response.
+                // Remember only the job identity; never revive the old session.
+                if wasTranslation, response.response.outcome == .ok, let id = response.response.jobID {
+                    interruptedTranslationJobs.insert(id)
+                } else if wasTranslation, response.response.outcome == .text, let text = response.response.text {
+                    bufferedResults.append((response.response.jobID, text, [], .translationSource))
+                    drainBufferedResults()
+                }
+                return
+            }
             capture.settle(recording: false)
             if let status = response.response.status { applyHostStatus(status) }
             switch response.response.outcome {
@@ -349,10 +363,8 @@ final class KeyboardViewModel: ObservableObject {
 #if CORRECTION_TEST_FIXTURES
         if let fixture = testCorrectionDisposition { return fixture(response.jobID, text) }
 #endif
-        // Current wire type drops unknown fields. Re-encoding therefore fails
-        // closed until Mac's actual Codable protocol diff is integrated.
         return CorrectionWireDisposition.classify(jobID: response.jobID, text: text,
-                                                    encodedResponse: try? JSONEncoder().encode(response))
+            rawTranscript: response.rawTranscript, correctionReviewRequired: response.correctionReviewRequired)
     }
 
     private func drainBufferedResults() {
@@ -364,7 +376,11 @@ final class KeyboardViewModel: ObservableObject {
                 bufferedResults.append((id, text, suggestions, disposition))
                 continue
             }
-            if disposition == .translationSource { holdForRecovery(text); continue }
+            if disposition == .translationSource {
+                if let id { interruptedTranslationJobs.remove(id) }
+                holdForRecovery(text); statusText = "翻译未完成 · 原文已保留"
+                continue
+            }
             if let id, let contextID = translationJobs.removeValue(forKey: id) {
                 _ = submittedHere.remove(id)
                 if let translationModel {
@@ -774,18 +790,21 @@ final class KeyboardViewModel: ObservableObject {
             defer { if self.appearance == epoch { self.observer = nil } }
             while !Task.isCancelled, self.visible, self.appearance == epoch {
                 do {
-                    let knownTranslationJobs = Set(self.translationJobs.keys)
+                    let knownTranslationJobs = Set(self.translationJobs.keys).union(self.interruptedTranslationJobs)
                     let response = try await self.client.send(self.correctionReview == nil && self.placeReview == nil && self.heldResult == nil && !self.translationRecoveryPending && self.translationDeliveryPending == nil ? .status : .ping)
                     if response.response.outcome == .text, let text = response.response.text {
                         let id = response.response.jobID
-                        let disposition = self.correctionDisposition(response.response, text: text)
+                        let interrupted = id.map { self.interruptedTranslationJobs.contains($0) } ?? false
+                        let disposition: CorrectionWireDisposition = interrupted ? .translationSource : self.correctionDisposition(response.response, text: text)
                         let item = (id, text, response.response.placeSuggestions ?? [], disposition)
                         if self.visible, self.appearance == epoch {
                             self.bufferedResults.append(item); self.drainBufferedResults()
                         } else if let id, knownTranslationJobs.contains(id) {
                             // This is a translation source, never a translated result.
-                            if self.heldResult == nil { self.holdForRecovery(text) }
-                            else { self.bufferedResults.append((id, text, response.response.placeSuggestions ?? [], .translationSource)) }
+                            if self.heldResult == nil {
+                                self.interruptedTranslationJobs.remove(id)
+                                self.holdForRecovery(text); self.statusText = "翻译未完成 · 原文已保留"
+                            } else { self.bufferedResults.append((id, text, response.response.placeSuggestions ?? [], .translationSource)) }
                         } else {
                             // A consumed late dictation must retain its metadata
                             // and be classified before any explicit recovery.

@@ -6,14 +6,11 @@ import Foundation
         func check(_ condition: @autoclosure () -> Bool, _ label: String) {
             if condition() { print("PASS: \(label)") } else { failures += 1; print("FAIL: \(label)") }
         }
-        let fixtures: [(String, String)] = [
-            ("明天联系小明，小明是黄晓明的晓明。", "明天联系晓明。"),
-            ("聽日搵小明，小明係黃曉明嘅曉明。", "聽日搵曉明。")
-        ]
-        for (source, expected) in fixtures {
+        for source in ["明天联系小明，小明是黄晓明的晓明。", "聽日搵小明，小明係黃曉明嘅曉明。"] {
             let result = DictationTextPreparation(source, mode: .rewrite)
-            check(result.body == expected && result.original == source, "correct only explicit target: \(source)")
-            check(!result.accept("分析：" + expected), "provider analysis prefix rejected")
+            check(result.body == source && result.original == source && result.correctionNeedsConfirmation,
+                  "spelling hypothesis remains unchanged until confirmation")
+            check(!result.accept("分析：" + source), "provider analysis prefix rejected")
         }
         for text in ["小明是黄晓明的晓明", "他说小明是黄晓明的晓明", "小明和小明，把小明改成晓明。", "通知阿明，不要把阿明改成阿文。", "把小明改成晓明。", "他写下：把小明改成晓明。", "保留20份，不要删除3份。", "路线经过桂林和阳朔。", "明天联系小明，把小明改成晓明，把小王改成张明。", "明天联系小明，把小明改成晓明，把晓明改成张明，把张明改成王明。"] {
             check(SpokenCorrection.process(text, mode: .rewrite).body == text, "ambiguous or ordinary text preserved: \(text)")
@@ -35,6 +32,10 @@ import Foundation
         let unpunctuatedResult = SpokenCorrection.process(unpunctuated, mode: .rewrite)
         check(unpunctuatedResult.body == unpunctuated,
               "unpunctuated homophone hypothesis is not silently rewritten")
+        let spellingOnly = "明天联系小明，小明是黄晓明的晓明。"
+        let spellingPreparation = DictationTextPreparation(spellingOnly, mode: .rewrite)
+        check(spellingPreparation.correctionNeedsConfirmation && spellingPreparation.body == spellingOnly,
+              "spelling evidence from ASR still requires explicit review")
         let plain = DictationTextPreparation("明天出发。", mode: .rewrite)
         check(!plain.accept("分析：明天出发。"), "short input rejects analysis prefix")
         check(!plain.accept("以下是整理后的文本：明天出发。"), "short input rejects delivery preface")
