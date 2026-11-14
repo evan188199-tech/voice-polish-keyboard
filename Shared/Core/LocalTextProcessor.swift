@@ -33,7 +33,8 @@ enum LocalTextProcessor {
             // Index whitespace-separated tokens only (never split "Wi-Fi" into "Wi"/"Fi").
             for token in term.split(whereSeparator: { $0.isWhitespace }) {
                 let s = String(token)
-                if s.count >= 2 {
+                // Generic words in a product phrase are not brands on their own.
+                if s.count >= 2 && !["app", "store"].contains(s.lowercased()) {
                     map[s.lowercased()] = map[s.lowercased()] ?? s
                 }
             }
