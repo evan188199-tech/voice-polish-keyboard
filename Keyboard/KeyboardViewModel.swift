@@ -52,6 +52,10 @@ final class KeyboardViewModel: ObservableObject {
     var onDeliverDestination: ((UUID, String) -> Bool)?
     var onAbandonDestination: ((UUID) -> Void)?
     private var bufferedResults: [(UUID?, String, [PlaceNameSuggestion], CorrectionWireDisposition)] = []
+    // Process-local deduplication only. Durable cross-restart delivery still
+    // requires an end-to-end acknowledgement protocol.
+    private var seenResultIDs = Set<UUID>()
+    private var seenResultOrder: [UUID] = []
     @Published private(set) var correctionMetadataUnknown = false
 #if CORRECTION_TEST_FIXTURES
     var testCorrectionDisposition: ((UUID?, String) -> CorrectionWireDisposition)?
@@ -266,7 +270,8 @@ final class KeyboardViewModel: ObservableObject {
                 // Remember only the job identity; never revive the old session.
                 if wasTranslation, response.response.outcome == .ok, let id = response.response.jobID {
                     interruptedTranslationJobs.insert(id)
-                } else if wasTranslation, response.response.outcome == .text, let text = response.response.text {
+                } else if wasTranslation, response.response.outcome == .text, let text = response.response.text,
+                          claimResultID(response.response.jobID) {
                     bufferedResults.append((response.response.jobID, text, [], .translationSource))
                     drainBufferedResults()
                 }
@@ -288,6 +293,7 @@ final class KeyboardViewModel: ObservableObject {
                 statusText = readyPrompt
                 drainBufferedResults()
             case .text:
+                guard claimResultID(response.response.jobID) else { break }
                 // Compatibility with an older bridge; this command is never replayed.
                 if let context = activeTranslation {
                     translationModel?.cancel(context.id)
@@ -356,6 +362,16 @@ final class KeyboardViewModel: ObservableObject {
         } else {
             statusText = "结果已保留 · 可在更多操作中插入或复制"
         }
+    }
+
+    private func claimResultID(_ id: UUID?) -> Bool {
+        guard let id else { return true } // Legacy unknown identity stays quarantined.
+        guard seenResultIDs.insert(id).inserted else { return false }
+        seenResultOrder.append(id)
+        if seenResultOrder.count > 512 {
+            let oldest = seenResultOrder.removeFirst(); seenResultIDs.remove(oldest)
+        }
+        return true
     }
 
     private func correctionDisposition(_ response: BridgeResponse, text: String) -> CorrectionWireDisposition {
@@ -792,7 +808,8 @@ final class KeyboardViewModel: ObservableObject {
                 do {
                     let knownTranslationJobs = Set(self.translationJobs.keys).union(self.interruptedTranslationJobs)
                     let response = try await self.client.send(self.correctionReview == nil && self.placeReview == nil && self.heldResult == nil && !self.translationRecoveryPending && self.translationDeliveryPending == nil ? .status : .ping)
-                    if response.response.outcome == .text, let text = response.response.text {
+                    if response.response.outcome == .text, let text = response.response.text,
+                       self.claimResultID(response.response.jobID) {
                         let id = response.response.jobID
                         let interrupted = id.map { self.interruptedTranslationJobs.contains($0) } ?? false
                         let disposition: CorrectionWireDisposition = interrupted ? .translationSource : self.correctionDisposition(response.response, text: text)

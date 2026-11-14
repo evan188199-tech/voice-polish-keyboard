@@ -17,6 +17,8 @@ actor MockKeyboardBridge: KeyboardBridgeServing {
     private var pendingFinishReply: CheckedContinuation<Void, Never>?
     private var holdStatus = false
     private var pendingStatus: CheckedContinuation<Void, Never>?
+    private var repeatNextResult = false
+    private var replayResult: BridgeResponse?
 
     func configure(startError: BridgeErrorCode? = nil, delayStart: Bool = false,
                    delayFinish: Bool = false, delayCancel: Bool = false, failFinish: Bool = false, placeSuggestions: Bool = false,
@@ -33,6 +35,7 @@ actor MockKeyboardBridge: KeyboardBridgeServing {
     func holdNextFinishReply() { holdFinishReply = true }
     func isFinishReplyHeld() -> Bool { pendingFinishReply != nil }
     func releaseFinishReply() { pendingFinishReply?.resume(); pendingFinishReply = nil }
+    func duplicateNextResult() { repeatNextResult = true }
     func holdNextStatus() { holdStatus = true }
     func isStatusHeld() -> Bool { pendingStatus != nil }
     func releaseStatus() { pendingStatus?.resume(); pendingStatus = nil }
@@ -81,12 +84,15 @@ actor MockKeyboardBridge: KeyboardBridgeServing {
             response = .ok(status: status())
         case .status:
             // A later result is ready first; only the head may be consumed.
-            if let (id, text) = jobs.first, let text {
+            if let replay = replayResult {
+                replayResult = nil; response = replay
+            } else if let (id, text) = jobs.first, let text {
                 jobs.removeFirst()
                 if holdStatus { holdStatus = false; await withCheckedContinuation { pendingStatus = $0 } }
                 let candidates = placeSuggestions ? PlaceNameMatcher.suggestions(in: text,
                     entries: [PlaceNameEntry(name: "桂林", aliases: ["贵林"])], script: .simplified) : []
                 response = .text(text, status: status(), jobID: id, placeSuggestions: candidates, rawTranscript: wireRaw, correctionReviewRequired: wireReview)
+                if repeatNextResult { repeatNextResult = false; replayResult = response }
             } else { response = .ok(status: status()) }
         default:
             response = .ok(status: status())
@@ -385,6 +391,22 @@ actor PortableTranslationProvider: TextTranslating {
               "restart restores raw review and requires a fresh explicit choice")
         reconstructed.cancelCorrection(reviewID: reconstructed.correctionReviewID!)
 
+        let replayBridge = MockKeyboardBridge()
+        let replayModel = await makeModel(replayBridge)
+        var replayOutputs: [String] = []
+        replayModel.onTextReady = { replayOutputs.append($0) }
+        await replayModel.toggleRecording(); await replayModel.toggleRecording()
+        await replayBridge.duplicateNextResult()
+        await replayBridge.complete(0, text: "联系小明，把小明改成晓明。")
+        await pause(600)
+        let replayReviewID = replayModel.correctionReviewID!
+        replayModel.chooseCorrection("晓明", reviewID: replayReviewID)
+        replayModel.useCorrection(reviewID: replayReviewID)
+        await pause(700)
+        check(replayOutputs == ["联系晓明。"] && replayModel.correctionReview == nil && replayModel.heldResult == nil,
+              "duplicate job response does not reopen review or offer duplicate delivery")
+        replayModel.disconnect()
+
         let legacyCorrectionBridge = MockKeyboardBridge()
         await legacyCorrectionBridge.configure(legacyText: "明天联系小明，把小明改成晓明。")
         let legacyCorrection = await makeModel(legacyCorrectionBridge)
@@ -463,6 +485,28 @@ actor PortableTranslationProvider: TextTranslating {
         // The host can enqueue the translation before its finish response is
         // delivered. Closing the keyboard in that window must not relabel the
         // untranslated source as ordinary dictation after reopening.
+        let lostTranslationBridge = MockKeyboardBridge()
+        await lostTranslationBridge.configure(failFinish: true)
+        let lostTranslationModel = await makeModel(lostTranslationBridge)
+        lostTranslationModel.testCorrectionDisposition = nil
+        let lostTranslation = TranslationViewModel(service: PortableTranslationProvider(),
+            defaults: UserDefaults(suiteName: "lost-translation-\(UUID())")!)
+        await lostTranslation.appear(hasFullAccess: true, hostSessionID: UUID())
+        lostTranslationModel.startTranslation(.english, translation: lostTranslation)
+        await pause(100); await lostTranslationModel.toggleRecording()
+        lostTranslation.disappear(); lostTranslationModel.disconnect()
+        await lostTranslationBridge.complete(0, text: "虚构未翻译原文")
+        let rebuilt = KeyboardViewModel(client: lostTranslationBridge, defaults: UserDefaults(suiteName: "rebuilt-translation-\(UUID())")!)
+        var rebuiltOutputs: [String] = []
+        rebuilt.onTextReady = { rebuiltOutputs.append($0) }
+        rebuilt.onDeliverDestination = { _, text in rebuiltOutputs.append(text); return true }
+        rebuilt.canExplicitlyInsert = { true }
+        rebuilt.appear(); await rebuilt.connect(); await pause(650)
+        check(rebuiltOutputs.isEmpty && rebuilt.correctionMetadataUnknown && rebuilt.correctionReview?.restoreOriginal() == "虚构未翻译原文",
+              "lost translation acknowledgment plus keyboard rebuild quarantines unknown source")
+        if let reviewID = rebuilt.correctionReviewID { rebuilt.cancelCorrection(reviewID: reviewID) }
+        rebuilt.disconnect()
+
         let lateFinishBridge = MockKeyboardBridge()
         let lateFinishModel = await makeModel(lateFinishBridge)
         lateFinishModel.testCorrectionDisposition = nil // actual pre-contract receiver
