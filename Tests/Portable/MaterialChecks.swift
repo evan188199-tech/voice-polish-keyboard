@@ -35,12 +35,14 @@ import Foundation
         let preview = try! TermImportPreview.parse(data)
         check(preview.candidates.count == 2 && preview.rejectedCount == 2 && preview.ignoredFieldCount == 2, "whitelist preview ignores private extra fields and rejects unsafe terms")
         check(session.privateTerms.isEmpty, "preview never imports automatically")
-        try! session.confirmImport(preview, selected: [preview.candidates[0].id], expectedAccount: "fixture-A")
+        do { try session.confirmImport(preview, selected: [preview.candidates[0].id], expectedAccount: "fixture-A"); check(false, "review required") }
+        catch { check(session.privateTerms.isEmpty, "manual review confirmation is enforced in core") }
+        try! session.confirmImport(preview, selected: [preview.candidates[0].id], expectedAccount: "fixture-A", reviewed: true)
         check(session.privateTerms.count == 1 && session.privateTerms[0].term == "桂林", "only explicitly selected allowlisted term enters local index")
         let version = session.cacheVersion
         await session.useDemo("fixture-B")
         check(session.privateTerms.isEmpty && session.materials.allSatisfy { $0.accountID == "fixture-B" } && session.cacheVersion > version, "account switch clears cache and isolates workspaces")
-        do { try session.confirmImport(preview, selected: [preview.candidates[0].id], expectedAccount: "fixture-A"); check(false, "stale preview must fail") }
+        do { try session.confirmImport(preview, selected: [preview.candidates[0].id], expectedAccount: "fixture-A", reviewed: true); check(false, "stale preview must fail") }
         catch { check(true, "stale account import is blocked") }
         check(session.keyboardSnapshot(hasFullAccess: false) == nil && session.keyboardSnapshot(hasFullAccess: true) == nil, "private keyboard sharing fails closed without verified secure transport")
         let snapshot = MaterialKeyboardSnapshot(accountID: "fixture-B", version: 3, expiresAt: now.addingTimeInterval(20), items: [])

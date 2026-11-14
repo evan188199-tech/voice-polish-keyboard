@@ -615,7 +615,6 @@ final class KeyboardViewModel: ObservableObject {
         currentState = status.state
         pendingCount = status.pendingCount ?? 0
         needsActivation = status.state == .inactive || status.errorCode == .micDenied || status.errorCode == .modelNotReady
-        if placeReview != nil { queueText = "地名候选待确认 · 后续结果按序等待" }
         // Queue progress must never masquerade as microphone activity.
         if placeReview != nil {
             queueText = "地名候选待确认 · 后续结果按序等待"

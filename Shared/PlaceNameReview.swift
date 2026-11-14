@@ -35,7 +35,8 @@ enum PlaceNameMatcher {
         let correctForms = Set(enabled.flatMap { [$0.name, $0.traditional] }.filter { !$0.isEmpty })
         var output: [PlaceNameSuggestion] = []
         for entry in enabled {
-            let replacement = script == .traditionalHK && !entry.traditional.isEmpty ? entry.traditional : entry.name
+            let base = script == .traditionalHK && !entry.traditional.isEmpty ? entry.traditional : entry.name
+            let replacement = ChineseScriptConverter.convert(base, direction: script.conversionDirection)
             for alias in Set(entry.aliases) where alias.count >= 2 && !correctForms.contains(alias) {
                 var start = text.startIndex
                 while start < text.endIndex, let range = text.range(of: alias, range: start..<text.endIndex) {

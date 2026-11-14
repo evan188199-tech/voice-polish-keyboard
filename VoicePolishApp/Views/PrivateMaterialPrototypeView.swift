@@ -31,7 +31,7 @@ struct PrivateMaterialPrototypeView: View {
             Section("本地私人词汇预览") {
                 Text("仅导入你明确选择的 JSON 文件。白名单只取 term/kind，其他字段不保存。过滤不等于完成脱敏，请逐项人工核对；本轮只存当前工作区内存，注销即清空，不发布、不上传。")
                     .font(.caption)
-                Button("选择本地词汇 JSON") { importing = true }.disabled(session.account == nil)
+                Button("选择本地词汇 JSON") { importAccount = session.account?.id ?? ""; importing = true }.disabled(session.account == nil)
                 if let preview {
                     Text("保留 \(preview.candidates.count) 项；拒绝 \(preview.rejectedCount) 项；忽略 \(preview.ignoredFieldCount) 个非白名单字段。")
                         .font(.caption)
@@ -43,7 +43,7 @@ struct PrivateMaterialPrototypeView: View {
                     Toggle("我已逐项核对，内容只供本机私人搜索", isOn: $reviewedImport)
                     Button("确认选择的词汇") {
                         do {
-                            try session.confirmImport(preview, selected: selected, expectedAccount: importAccount)
+                            try session.confirmImport(preview, selected: selected, expectedAccount: importAccount, reviewed: reviewedImport)
                             self.preview = nil; selected.removeAll(); reviewedImport = false
                         } catch { message = error.localizedDescription }
                     }.disabled(!reviewedImport || selected.isEmpty)
@@ -57,6 +57,10 @@ struct PrivateMaterialPrototypeView: View {
                         Text("\(material.verification.rawValue) / \(material.visibility.rawValue) / v\(material.version)").font(.caption)
                         if let url = material.customerURL { Text("目的地：\(url.absoluteString)").font(.caption).textSelection(.enabled) }
                         Text(material.attribution).font(.caption)
+                        if material.hasApprovedImage {
+                            Image(uiImage: demoImage()).resizable().scaledToFit().frame(maxHeight: 140)
+                                .accessibilityLabel("本项目原创虚构素材图片预览")
+                        }
                         Toggle("确认本次仅使用此演示素材", isOn: Binding(
                             get: { confirmedMaterial.contains(material.id) },
                             set: { if $0 { confirmedMaterial.insert(material.id) } else { confirmedMaterial.remove(material.id) } }))
@@ -91,8 +95,9 @@ struct PrivateMaterialPrototypeView: View {
                 defer { if scoped { url.stopAccessingSecurityScopedResource() } }
                 let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
                 guard size <= 262_144 else { throw MaterialPrototypeError.invalidImport }
+                guard session.account?.id == importAccount else { throw MaterialPrototypeError.wrongAccount }
                 let candidatePreview = try TermImportPreview.parse(Data(contentsOf: url))
-                preview = candidatePreview; importAccount = session.account?.id ?? ""
+                preview = candidatePreview
                 selected.removeAll(); reviewedImport = false
             } catch { message = error.localizedDescription }
         }
@@ -108,6 +113,15 @@ struct PrivateMaterialPrototypeView: View {
         .sheet(item: $share) { payload in MaterialShareSheet(items: payload.items) }
         .onDisappear { resetUI(); session.logout() }
     }
+    private func demoImage() -> UIImage {
+        // Original fixed-size placeholder, not a real product image or remote asset.
+        return UIGraphicsImageRenderer(size: CGSize(width: 640, height: 400)).image { context in
+            UIColor.systemTeal.setFill(); context.fill(CGRect(x: 0, y: 0, width: 640, height: 400))
+            ("虚构示例素材\n本项目原创演示图" as NSString).draw(in: CGRect(x: 48, y: 140, width: 544, height: 160),
+                withAttributes: [.font: UIFont.systemFont(ofSize: 34, weight: .semibold), .foregroundColor: UIColor.white])
+        }
+    }
+
     private func resetUI() {
         preview = nil; selected.removeAll(); confirmedMaterial.removeAll()
         reviewedImport = false; draft = ""; share = nil; copyImage = nil; message = nil
@@ -121,12 +135,7 @@ struct PrivateMaterialPrototypeView: View {
                                               userConfirmed: confirmedMaterial.contains(material.id)) {
             message = "操作已阻止：" + reason; return
         }
-        // Original fixed-size placeholder, not a real product image or remote asset.
-        let image = UIGraphicsImageRenderer(size: CGSize(width: 640, height: 400)).image { context in
-            UIColor.systemTeal.setFill(); context.fill(CGRect(x: 0, y: 0, width: 640, height: 400))
-            ("虚构示例素材\n本项目原创演示图" as NSString).draw(in: CGRect(x: 48, y: 140, width: 544, height: 160),
-                withAttributes: [.font: UIFont.systemFont(ofSize: 34, weight: .semibold), .foregroundColor: UIColor.white])
-        }
+        let image = demoImage()
         if copying {
             UIPasteboard.general.setItemProviders([NSItemProvider(object: image)], localOnly: true, expirationDate: Date().addingTimeInterval(60))
             ownedPasteboardChange = UIPasteboard.general.changeCount

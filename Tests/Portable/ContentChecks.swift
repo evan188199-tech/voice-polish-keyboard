@@ -37,6 +37,8 @@ final class FixtureURLProtocol: URLProtocol, @unchecked Sendable {
         let code = "第一步修改 /tmp/AH/foo_v2.1.swift，第二步运行 x = 20; 不要删除 API_KEY"
         check(FaithfulTextFormatter.format(code, mode: .coding) == code && LocalTextProcessor.process(code, vocabulary: "") == code, "coding paths, symbols, versions and tokens survive")
         check(LocalTextProcessor.process("Shah has a name", vocabulary: "").contains("Shah"), "filler removal never deletes syllables inside English names")
+        let codePreparation = DictationTextPreparation(code, mode: .coding)
+        check(!codePreparation.accept(code.replacingOccurrences(of: "x =", with: "x +=")), "code punctuation cannot be changed by cloud formatting")
         let huge = String(repeating: "不要遗漏20个样品，原因是质量要求。", count: 3000)
         let hugeBody = FaithfulTextFormatter.format(huge, mode: .rewrite)
         check(hugeBody.replacingOccurrences(of: "\n", with: "") == huge, "very long local text is never truncated")

@@ -87,12 +87,13 @@ struct TermImportPreview: Sendable {
     }
 }
 enum MaterialPrototypeError: Error, LocalizedError {
-    case disconnected, invalidImport, wrongAccount
+    case disconnected, invalidImport, wrongAccount, reviewRequired
     var errorDescription: String? {
         switch self {
         case .disconnected: "真实账号尚未连接；仅能使用演示适配器。"
         case .invalidImport: "请选择不超过 256 KB 的 terms JSON；每行仅需 term 和 kind。"
         case .wrongAccount: "账号已切换，请重新预览并确认。"
+        case .reviewRequired: "请先逐项人工核对导入预览。"
         }
     }
 }
@@ -149,8 +150,9 @@ struct MaterialKeyboardSnapshot: Codable, Equatable, Sendable {
         generation &+= 1; cacheVersion += 1
         account = nil; materials = []; privateTerms = []
     }
-    func confirmImport(_ preview: TermImportPreview, selected: Set<UUID>, expectedAccount: String) throws {
+    func confirmImport(_ preview: TermImportPreview, selected: Set<UUID>, expectedAccount: String, reviewed: Bool = false) throws {
         guard account?.id == expectedAccount else { throw MaterialPrototypeError.wrongAccount }
+        guard reviewed else { throw MaterialPrototypeError.reviewRequired }
         let chosen = preview.candidates.filter { selected.contains($0.id) }
         for term in chosen where !privateTerms.contains(where: { $0.term == term.term && $0.kind == term.kind }) { privateTerms.append(term) }
         // Prototype index is memory-only and account-scoped. Logout/revoke clears it.

@@ -37,6 +37,9 @@ import Foundation
         check(ambiguous.count == 2, "same-name regions remain multiple explicit candidates")
         check(PlaceNameMatcher.suggestions(in: "keep /tmp/贵林.txt", entries: store.entries, script: .simplified).isEmpty, "place suggestions do not rewrite code/path")
         check(PlaceNameDictionaryStore.seeds.allSatisfy { $0.aliases.isEmpty && $0.origin == .publicSeed }, "public seeds contain no invented pronunciation/confusion mappings")
+        let hkEntry = PlaceNameEntry(name: "广州", aliases: ["广洲"])
+        let hkCandidates = PlaceNameMatcher.suggestions(in: "去广洲", entries: [hkEntry], script: .traditionalHK)
+        check(hkCandidates.first?.replacement == "廣州", "candidate output respects traditional preference even without explicit variant")
         store.remove(guilin.id)
         check(store.entries.isEmpty, "dictionary deletion persists")
     }

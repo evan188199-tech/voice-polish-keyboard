@@ -16,11 +16,12 @@ enum FaithfulTextFormatter {
         guard text.count >= 160, !text.contains("\n") else { return text }
         var output = ""
         var sentences = 0
+        let characterCount = text.count
         for (index, character) in text.enumerated() {
             output.append(character)
             if "。！？".contains(character) {
                 sentences += 1
-                if sentences % 3 == 0, index < text.count - 1 { output += "\n\n" }
+                if sentences % 3 == 0, index < characterCount - 1 { output += "\n\n" }
             }
         }
         return output
@@ -64,7 +65,7 @@ enum FaithfulTextFormatter {
     }
 
     private static func signature(_ text: String) -> String {
-        let withoutNumbers = text.replacingOccurrences(of: #"(?m)^\s*[0-9]+[.)、]\s*"#, with: "", options: .regularExpression)
+        let withoutNumbers = text.replacingOccurrences(of: #"(?m)^\s*[1-9][.)、][ \t]+"#, with: "", options: .regularExpression)
         return String(withoutNumbers.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) })
     }
 }
@@ -74,17 +75,20 @@ struct DictationTextPreparation: Sendable {
     let body: String
     let strictLayout: Bool
     let correctionNeedsConfirmation: Bool
+    let literalContent: Bool
 
     init(_ text: String, mode: PolishMode) {
         original = text
         let correction = SpokenCorrection.process(text, mode: mode)
         body = FaithfulTextFormatter.format(correction.body, mode: mode)
         correctionNeedsConfirmation = correction.needsConfirmation
+        literalContent = mode == .coding || FaithfulTextFormatter.isProtected(text)
         strictLayout = mode != .askLLM && (text.count >= 120 || body != text || correction.needsConfirmation || mode == .coding || FaithfulTextFormatter.isProtected(text))
     }
 
     func accept(_ candidate: String) -> Bool {
         !candidate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (!literalContent || candidate == body)
             && (!strictLayout || FaithfulTextFormatter.preservesContent(candidate, source: body))
     }
 }
