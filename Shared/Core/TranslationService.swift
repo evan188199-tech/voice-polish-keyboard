@@ -44,11 +44,19 @@ struct ConfiguredTranslationService: TextTranslating {
             let result = try await provider.polish(input, settings: translationSettings)
             try Task.checkCancellation()
             let translated = try Self.parse(result, target: request.context.target)
+            // Conservative: a provider echo must not masquerade as a translation.
+            // Same-spelling translations are also held for manual handling.
+            func normalized(_ text: String) -> String {
+                let ignored = CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters)
+                return String(text.precomposedStringWithCanonicalMapping.lowercased().unicodeScalars.filter { !ignored.contains($0) })
+            }
+            guard normalized(translated) != normalized(request.source) else { throw TranslationFailure.unsafeResult }
             guard TranslationContentGuard.validate(source: request.source, translation: translated) else { throw TranslationFailure.unsafeResult }
             return TranslationEvent(context: request.context, source: request.source, translation: translated, failure: nil)
         } catch let failure as TranslationFailure { throw failure }
         catch is CancellationError { throw TranslationFailure.cancelled }
         catch let error as URLError {
+            if error.code == .cancelled { throw TranslationFailure.cancelled }
             throw error.code == .timedOut ? TranslationFailure.timeout : TranslationFailure.offline
         } catch let error as PolishingError {
             switch error {
