@@ -7,16 +7,21 @@ actor MockKeyboardBridge: KeyboardBridgeServing {
     private var startError: BridgeErrorCode?
     private var delayStart = false
     private var delayFinish = false
+    private var delayCancel = false
     private var failFinish = false
     private var placeSuggestions = false
+    private var legacyText: String?
 
     func configure(startError: BridgeErrorCode? = nil, delayStart: Bool = false,
-                   delayFinish: Bool = false, failFinish: Bool = false, placeSuggestions: Bool = false) {
+                   delayFinish: Bool = false, delayCancel: Bool = false, failFinish: Bool = false, placeSuggestions: Bool = false,
+                   legacyText: String? = nil) {
         self.startError = startError
         self.delayStart = delayStart
         self.delayFinish = delayFinish
+        self.delayCancel = delayCancel
         self.failFinish = failFinish
         self.placeSuggestions = placeSuggestions
+        self.legacyText = legacyText
     }
     func seedRecording() { recording = true }
     func seedJob(_ text: String) { jobs.append((UUID(), text)) }
@@ -47,12 +52,17 @@ actor MockKeyboardBridge: KeyboardBridgeServing {
             if delayFinish { try await Task.sleep(nanoseconds: 60_000_000) }
             if recording {
                 recording = false
-                let id = UUID()
-                jobs.append((id, nil))
-                if failFinish { throw URLError(.networkConnectionLost) }
-                response = .ok(status: status(), jobID: id)
+                if let legacyText {
+                    response = .text(legacyText, status: status())
+                } else {
+                    let id = UUID()
+                    jobs.append((id, nil))
+                    if failFinish { throw URLError(.networkConnectionLost) }
+                    response = .ok(status: status(), jobID: id)
+                }
             } else { response = .error("未录音", code: .notRecording) }
         case .cancel:
+            if delayCancel { try await Task.sleep(nanoseconds: 200_000_000) }
             recording = false
             response = .ok(status: status())
         case .status:
@@ -163,6 +173,33 @@ actor PortableTranslationProvider: TextTranslating {
         model.disconnect()
         await pause()
 
+        let pendingCancelBridge = MockKeyboardBridge()
+        await pendingCancelBridge.configure(delayStart: true, delayCancel: true)
+        let pendingCancelModel = await makeModel(pendingCancelBridge)
+        let pendingStart = Task { await pendingCancelModel.toggleRecording() }
+        await pause(10)
+        let pendingCancel = Task { await pendingCancelModel.cancelRecording() }
+        await pause(90)
+        check(pendingCancelModel.capture.phase == .cancelling && !pendingCancelModel.isRecording,
+              "late start acknowledgement cannot overwrite pending cancellation")
+        await pendingStart.value; await pendingCancel.value
+        check(!pendingCancelModel.isRecording && pendingCancelModel.capture.phase == .idle,
+              "cancel after pending start settles without committing")
+        pendingCancelModel.disconnect()
+
+        let legacyBridge = MockKeyboardBridge()
+        await legacyBridge.configure(legacyText: "旧协议结果")
+        let legacyModel = await makeModel(legacyBridge)
+        var legacyInserted: [String] = []
+        legacyModel.onTextReady = { legacyInserted.append($0) }
+        legacyModel.onDeliverDestination = { _, _ in false }
+        await legacyModel.toggleRecording(); await legacyModel.toggleRecording()
+        check(legacyInserted.isEmpty && legacyModel.heldResult == "旧协议结果",
+              "legacy immediate result is held when target cannot be verified")
+        legacyModel.insertHeldResult()
+        check(legacyInserted == ["旧协议结果"], "legacy result requires explicit recovery")
+        legacyModel.disconnect()
+
         let restoredBridge = MockKeyboardBridge()
         await restoredBridge.seedRecording()
         let restored = await makeModel(restoredBridge)
@@ -221,6 +258,7 @@ actor PortableTranslationProvider: TextTranslating {
         translation.onInsert = { mixedInsertions.append($0) }
         translation.onAutomaticInsert = { [weak translation] _, text in guard let insert = translation?.onInsert else { return false }; insert(text); return true }
         await translation.appear(hasFullAccess: true, hostSessionID: UUID())
+        mixed.startTranslation(.english, translation: translation)
         mixed.startTranslation(.english, translation: translation)
         await pause(100)
         check(mixed.isRecording, "translation selection starts one actual mock recording")

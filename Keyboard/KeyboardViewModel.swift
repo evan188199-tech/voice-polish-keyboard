@@ -173,7 +173,7 @@ final class KeyboardViewModel: ObservableObject {
 
     func startTranslation(_ target: TranslationTarget, translation: TranslationViewModel) {
         guard visible, isConnected, !needsActivation, !capture.isTransitioning, !capture.isRecording,
-              let context = translation.prepareVoice(target: target) else { return }
+              activeTranslation == nil, let context = translation.prepareVoice(target: target) else { return }
         attachTranslation(translation)
         activeTranslation = context
         Task {
@@ -198,7 +198,7 @@ final class KeyboardViewModel: ObservableObject {
             // The server already retries short microphone-route recovery windows.
             // Do not replay a start whose response might have been lost.
             let response = try await client.send(.start)
-            guard visible, appearance == epoch else { return }
+            guard visible, appearance == epoch, capture.phase == .starting else { return }
             let status = response.response.status
             if response.response.outcome == .ok, status?.state == .recording {
                 capture.settle(recording: true)
@@ -217,7 +217,7 @@ final class KeyboardViewModel: ObservableObject {
             drainBufferedResults()
         } catch {
             // A start may have reached the host. Stop it before offering another attempt.
-            guard visible, appearance == epoch else { return }
+            guard visible, appearance == epoch, capture.phase == .starting else { return }
             _ = try? await client.send(.cancel)
             guard visible, appearance == epoch else { return }
             capture.settle(recording: false)
@@ -254,12 +254,12 @@ final class KeyboardViewModel: ObservableObject {
                 if let context = activeTranslation {
                     translationModel?.cancel(context.id)
                     activeTranslation = nil
-                    if let text = response.response.text { receiveResult(text, autoInsert: false) }
+                    if let text = response.response.text { holdForRecovery(text) }
                 } else if let text = response.response.text {
                     let allowed = activeDestination.map { onDeliverDestination?($0, text) == true } ?? false
                     activeDestination = nil
-                    receiveResult(text, autoInsert: false)
-                    if !allowed { statusText = "输入位置无法确认 · 结果已保留，请主动恢复" }
+                    if allowed { receiveResult(text, autoInsert: false) }
+                    else { holdForRecovery(text) }
                 }
             case .error, .unauthorized:
                 if let context = activeTranslation { translationModel?.cancel(context.id); activeTranslation = nil }
