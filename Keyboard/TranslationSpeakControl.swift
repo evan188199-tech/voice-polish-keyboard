@@ -23,16 +23,6 @@ struct TranslationSpeakControl: View {
     }
     var body: some View {
         VStack(spacing: 6) {
-            HStack(spacing: 2) {
-                ForEach(Array(targets.enumerated()), id: \.element.id) { index, target in
-                    Text(target.displayName).font(.caption2)
-                        .frame(maxWidth: .infinity, minHeight: 44)
-                        .background(selected == index ? Color.accentColor.opacity(0.2) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
-                }
-            }
-            .frame(width: selectionWidth, height: 44)
-            .opacity(elapsed >= TranslationSpeakGesture.holdDuration && drag.height < 0 ? 1 : 0)
-            .accessibilityHidden(true)
             ZStack {
                 Circle().fill(needsActivation ? Color.clear : Color.primary)
                 Circle().strokeBorder(Color.primary, lineWidth: 1.5)
@@ -44,6 +34,20 @@ struct TranslationSpeakControl: View {
                 }
             }
             .frame(width: 76, height: 76)
+            .overlay(alignment: .top) {
+                HStack(spacing: 2) {
+                    ForEach(Array(targets.enumerated()), id: \.element.id) { index, target in
+                        Text(target.displayName).font(.caption2)
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                            .background(selected == index ? Color.accentColor.opacity(0.2) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+                    }
+                }
+                .frame(width: selectionWidth, height: 44)
+                .opacity(elapsed >= TranslationSpeakGesture.holdDuration && drag.height < 0 ? 1 : 0)
+                .offset(y: -44)
+                .accessibilityHidden(true)
+                .allowsHitTesting(false)
+            }
             .contentShape(Circle())
             .gesture(gesture)
             .accessibilityLabel(isRecording ? "完成录音" : "Speak，说话")
