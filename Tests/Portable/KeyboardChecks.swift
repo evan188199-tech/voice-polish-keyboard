@@ -389,6 +389,67 @@ actor PortableTranslationProvider: TextTranslating {
               "translation recovery releases following dictation in order")
         blockedTranslation.disappear(); blockedModel.disconnect()
 
+        let verifiedDictationBridge = MockKeyboardBridge()
+        let verifiedDictation = await makeModel(verifiedDictationBridge)
+        var dictationGuard = TranslationDeliveryGuard()
+        let dictationField = UUID()
+        var verifiedDictationResults: [String] = []
+        verifiedDictation.onCaptureDestination = { id in
+            dictationGuard.capture(id, document: dictationField, visible: true, connected: true, continuityVerified: true)
+        }
+        verifiedDictation.onDeliverDestination = { id, text in
+            guard dictationGuard.consume(id, document: dictationField, visible: true, connected: true) else { return false }
+            verifiedDictationResults.append(text); return true
+        }
+        await verifiedDictation.toggleRecording(); await verifiedDictation.toggleRecording()
+        await verifiedDictationBridge.complete(0, text: "虚构整理结果")
+        await pause(650)
+        check(verifiedDictationResults == ["虚构整理结果"], "verified mock target receives dictation directly once")
+        await pause(300)
+        check(verifiedDictationResults.count == 1, "verified mock dictation is not reinserted")
+        verifiedDictation.disconnect()
+
+        // Simulate a future host that supplies trustworthy continuity evidence.
+        // This exercises the real guard with the full keyboard/mock voice flow;
+        // UIKit currently does not claim or enable that evidence.
+        let verifiedBridge = MockKeyboardBridge()
+        let verifiedKeyboard = await makeModel(verifiedBridge)
+        let verifiedTranslation = TranslationViewModel(service: PortableTranslationProvider(),
+            defaults: UserDefaults(suiteName: "verified-voice-\(UUID())")!)
+        var verifiedGuard = TranslationDeliveryGuard()
+        let verifiedFieldA = UUID(), verifiedFieldB = UUID()
+        var verifiedCurrentField = verifiedFieldA
+        var verifiedInserted: [String] = []
+        verifiedTranslation.onInsert = { verifiedInserted.append($0) }
+        verifiedTranslation.canExplicitlyInsert = { true }
+        verifiedTranslation.onCaptureTarget = { id in
+            verifiedGuard.capture(id, document: verifiedCurrentField, visible: true, connected: true, continuityVerified: true)
+        }
+        verifiedTranslation.onAutomaticInsert = { id, text in
+            guard verifiedGuard.consume(id, document: verifiedCurrentField, visible: true, connected: true) else { return false }
+            verifiedInserted.append(text); return true
+        }
+        verifiedTranslation.onAbandonTarget = { id in verifiedGuard.abandon(id) }
+        await verifiedTranslation.appear(hasFullAccess: true, hostSessionID: UUID())
+        verifiedKeyboard.startTranslation(.english, translation: verifiedTranslation)
+        await pause(100); await verifiedKeyboard.toggleRecording()
+        await verifiedBridge.complete(0, text: "同一输入框")
+        await pause(950)
+        check(verifiedInserted == ["Translated."], "verified mock target receives voice translation directly exactly once")
+        await pause(300)
+        check(verifiedInserted.count == 1, "verified target does not redeliver an acknowledged result")
+        verifiedKeyboard.startTranslation(.english, translation: verifiedTranslation)
+        await pause(100); await verifiedKeyboard.toggleRecording()
+        verifiedCurrentField = verifiedFieldB
+        verifiedGuard.invalidate()
+        await verifiedBridge.complete(0, text: "旧字段原文")
+        await pause(950)
+        check(verifiedInserted == ["Translated."] && verifiedTranslation.lastTranslationCanInsert,
+              "changed mock target quarantines voice translation rather than inserting")
+        verifiedTranslation.insertLastTranslation()
+        check(verifiedInserted == ["Translated.", "Translated."], "explicit recovery inserts into currently selected mock field")
+        verifiedTranslation.disappear(); verifiedKeyboard.disconnect()
+
         var cursor = OrderedDeliveryCursor()
         check(!cursor.canDeliver(sequence: 2) && cursor.canDeliver(sequence: 1), "production ordered cursor blocks second result")
         cursor.advance()
