@@ -1,0 +1,102 @@
+import Foundation
+
+enum PlaceLanguage: String, CaseIterable, Codable, Sendable { case general = "通用", cantonese = "粤语", mandarin = "普通话" }
+enum PlaceOrigin: String, Codable, Sendable { case publicSeed, user }
+struct PlaceNameEntry: Identifiable, Codable, Equatable, Sendable {
+    var id = UUID()
+    var name: String
+    var traditional: String = ""
+    var aliases: [String] = []
+    var language: PlaceLanguage = .general
+    var region: String = ""
+    var source: String = "用户本地录入"
+    var origin: PlaceOrigin = .user
+    var isConfirmed = false
+    var isEnabled = true
+}
+struct PlaceNameSuggestion: Identifiable, Codable, Equatable, Sendable {
+    var id = UUID()
+    let location: Int
+    let length: Int
+    let original: String
+    let replacement: String
+    let region: String
+    let confirmedEntry: Bool
+    var range: NSRange { NSRange(location: location, length: length) }
+}
+
+enum PlaceNameMatcher {
+    static func suggestions(in text: String, entries: [PlaceNameEntry], script: ChineseScriptPreference) -> [PlaceNameSuggestion] {
+        guard !FaithfulPlaceProtection.isProtected(text) else { return [] }
+        let enabled = entries.filter(\.isEnabled).sorted { lhs, rhs in
+            if lhs.origin != rhs.origin { return lhs.origin == .user }
+            return lhs.name < rhs.name
+        }
+        let correctForms = Set(enabled.flatMap { [$0.name, $0.traditional] }.filter { !$0.isEmpty })
+        var output: [PlaceNameSuggestion] = []
+        for entry in enabled {
+            let replacement = script == .traditionalHK && !entry.traditional.isEmpty ? entry.traditional : entry.name
+            for alias in Set(entry.aliases) where alias.count >= 2 && !correctForms.contains(alias) {
+                var start = text.startIndex
+                while start < text.endIndex, let range = text.range(of: alias, range: start..<text.endIndex) {
+                    let ns = NSRange(range, in: text)
+                    output.append(PlaceNameSuggestion(location: ns.location, length: ns.length, original: alias,
+                        replacement: replacement, region: entry.region, confirmedEntry: entry.isConfirmed))
+                    start = range.upperBound
+                }
+            }
+        }
+        return output
+    }
+}
+// Keep this DTO/helper available to the extension without importing ASR or private stores.
+enum FaithfulPlaceProtection {
+    static func isProtected(_ text: String) -> Bool {
+        text.contains("/") || text.contains("`") || text.contains("=") || text.contains("{")
+            || text.contains("\"") || text.contains("“") || text.contains("「") || text.contains("『")
+    }
+}
+
+struct PlaceReviewDraft: Codable, Equatable, Sendable {
+    struct Choice: Codable, Equatable, Sendable { var selected: [UUID]; var rejected: [UUID] }
+    let original: String
+    let suggestions: [PlaceNameSuggestion]
+    private(set) var choice = Choice(selected: [], rejected: [])
+    private var undoStack: [Choice] = []
+    init(original: String, suggestions: [PlaceNameSuggestion]) {
+        self.original = original
+        self.suggestions = suggestions
+    }
+    var canUndo: Bool { !undoStack.isEmpty }
+    var visibleSuggestions: [PlaceNameSuggestion] { suggestions.filter { !choice.rejected.contains($0.id) } }
+    var text: String {
+        let result = NSMutableString(string: original)
+        for suggestion in suggestions.filter({ choice.selected.contains($0.id) }).sorted(by: { $0.location > $1.location }) {
+            guard valid(suggestion) else { continue }
+            result.replaceCharacters(in: suggestion.range, with: suggestion.replacement)
+        }
+        return result as String
+    }
+    private func valid(_ suggestion: PlaceNameSuggestion) -> Bool {
+        guard suggestion.location >= 0, suggestion.length > 0,
+              suggestion.location <= (original as NSString).length - suggestion.length else { return false }
+        return (original as NSString).substring(with: suggestion.range) == suggestion.original
+    }
+    @discardableResult mutating func confirm(_ id: UUID) -> Bool {
+        guard let candidate = suggestions.first(where: { $0.id == id }), valid(candidate) else { return false }
+        undoStack.append(choice)
+        choice.selected.removeAll { existingID in
+            guard let other = suggestions.first(where: { $0.id == existingID }) else { return true }
+            return NSIntersectionRange(other.range, candidate.range).length > 0
+        }
+        choice.selected.append(id)
+        choice.rejected.removeAll { $0 == id }
+        return true
+    }
+    mutating func reject(_ id: UUID) {
+        undoStack.append(choice)
+        choice.selected.removeAll { $0 == id }
+        choice.rejected.append(id)
+    }
+    mutating func undo() { if let previous = undoStack.popLast() { choice = previous } }
+}

@@ -14,6 +14,7 @@ struct VocabularyView: View {
     var body: some View {
         NavigationStack {
             List {
+                NavigationLink("旅游地名词典（本地候选确认）") { PlaceNameDictionaryView() }
                 Section {
                     HStack {
                         TextField("添加词条", text: $newPhrase)

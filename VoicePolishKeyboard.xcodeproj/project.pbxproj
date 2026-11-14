@@ -67,6 +67,10 @@
 		DA0120261114000000000002 /* VoiceKeyboardCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0120261114000000000003 /* VoiceKeyboardCapture.swift */; };
 		DA0220261114000000000001 /* FaithfulTextFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0220261114000000000002 /* FaithfulTextFormatter.swift */; };
 		DA0320261114000000000001 /* SpokenCorrection.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0320261114000000000002 /* SpokenCorrection.swift */; };
+		3C95BA55DB0ACC4953DC472A /* PlaceNameReview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2184F1A810BBDA0484543D3E /* PlaceNameReview.swift */; };
+		54C643420AB0BAF38284F4AC /* PlaceNameReview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2184F1A810BBDA0484543D3E /* PlaceNameReview.swift */; };
+		4615CD6F56593ADEB7AC61E7 /* PlaceNameDictionary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 793C69EF13E728FEED236293 /* PlaceNameDictionary.swift */; };
+		A063C7CF0F66DB5BCFF64F33 /* PlaceNameDictionaryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8A7073637F7BA0739452B11 /* PlaceNameDictionaryView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -157,6 +161,9 @@
 		DA0120261114000000000003 /* VoiceKeyboardCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceKeyboardCapture.swift; sourceTree = "<group>"; };
 		DA0220261114000000000002 /* FaithfulTextFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FaithfulTextFormatter.swift; sourceTree = "<group>"; };
 		DA0320261114000000000002 /* SpokenCorrection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpokenCorrection.swift; sourceTree = "<group>"; };
+		2184F1A810BBDA0484543D3E /* PlaceNameReview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaceNameReview.swift; sourceTree = "<group>"; };
+		793C69EF13E728FEED236293 /* PlaceNameDictionary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaceNameDictionary.swift; sourceTree = "<group>"; };
+		E8A7073637F7BA0739452B11 /* PlaceNameDictionaryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaceNameDictionaryView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -202,6 +209,7 @@
 				EF53E341C8D7D6B30A21AE56 /* StyleProfilesView.swift */,
 				08A3CBC529B7B797B3E95E72 /* TestInputView.swift */,
 				6454ED31C9E7BE3BF25B6ACB /* VocabularyView.swift */,
+				E8A7073637F7BA0739452B11 /* PlaceNameDictionaryView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -235,6 +243,7 @@
 				016C65BF0148E33EA696E3A0 /* OrderedDeliveryCursor.swift */,
 				DA0220261114000000000002 /* FaithfulTextFormatter.swift */,
 				DA0320261114000000000002 /* SpokenCorrection.swift */,
+				793C69EF13E728FEED236293 /* PlaceNameDictionary.swift */,
 				3305F071C6EEA40A03F26942 /* PolishMode.swift */,
 				4BCEE758CC4BA2F9D6D92719 /* SpeechTranscribing.swift */,
 				4C6FFBE459AAD43F9EBF3FC7 /* StyleProfile.swift */,
@@ -253,6 +262,7 @@
 				0F889D99651360D99CBF82D6 /* DeleteRepeatController.swift */,
 				E49B23FAC15A8D8327F47DA1 /* ShiftState.swift */,
 				DA0120261114000000000003 /* VoiceKeyboardCapture.swift */,
+				2184F1A810BBDA0484543D3E /* PlaceNameReview.swift */,
 				71D1E708042CA34886F8EA9C /* Core */,
 				D835CC8078820694DA0D66F5 /* Protocol */,
 			);
@@ -458,10 +468,12 @@
 				3E33EE046D9B191CF193BA0A /* OrderedDeliveryCursor.swift in Sources */,
 				DA0220261114000000000001 /* FaithfulTextFormatter.swift in Sources */,
 				DA0320261114000000000001 /* SpokenCorrection.swift in Sources */,
+				4615CD6F56593ADEB7AC61E7 /* PlaceNameDictionary.swift in Sources */,
 				E827F23053F6B430DE892C3A /* PolishMode.swift in Sources */,
 				8249E7DF06A518EB4031B994 /* SettingsView.swift in Sources */,
 				9EDFF8DB65083E79ED20F37A /* ShiftState.swift in Sources */,
 				DA0120261114000000000001 /* VoiceKeyboardCapture.swift in Sources */,
+				3C95BA55DB0ACC4953DC472A /* PlaceNameReview.swift in Sources */,
 				A86A1BAF9D1E69EBC0EBD7B8 /* SpeechTranscribing.swift in Sources */,
 				141575C6D0C00822764642EB /* StyleProfile.swift in Sources */,
 				3405088FA6CD8393CDC91653 /* StyleProfilesView.swift in Sources */,
@@ -469,6 +481,7 @@
 				5BFD17D307C2FA4F0D176F28 /* TextPolishing.swift in Sources */,
 				A496775410FA792F0AD294AA /* VocabularyEntry.swift in Sources */,
 				E864564E9651FAD205CB102D /* VocabularyView.swift in Sources */,
+				A063C7CF0F66DB5BCFF64F33 /* PlaceNameDictionaryView.swift in Sources */,
 				28501F9FF5C12B6A5E439A1F /* VoicePipeline.swift in Sources */,
 				935784CC1592916B2170DA86 /* VoicePolishApp.swift in Sources */,
 				F366520F7AB8352B27EB308A /* VoicePolishShortcuts.swift in Sources */,
@@ -495,6 +508,7 @@
 				AAB64C34CD2279B51C72505B /* PolishMode.swift in Sources */,
 				6C00DFA57AB6782489BB7467 /* ShiftState.swift in Sources */,
 				DA0120261114000000000002 /* VoiceKeyboardCapture.swift in Sources */,
+				54C643420AB0BAF38284F4AC /* PlaceNameReview.swift in Sources */,
 				5A6CA211E120858BD11E9941 /* WireMessage.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

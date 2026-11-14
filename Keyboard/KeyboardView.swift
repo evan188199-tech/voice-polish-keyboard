@@ -80,6 +80,9 @@ struct KeyboardView: View {
         VStack(spacing: 0) {
             voiceToolbar
             Spacer(minLength: 4)
+            if let review = model.placeReview, model.canSwitchPage {
+                placeReviewContent(review)
+            } else {
             HStack(spacing: 20) {
                 // Balanced space keeps the microphone centered when Cancel appears.
                 Color.clear.frame(width: 48, height: 44)
@@ -107,6 +110,7 @@ struct KeyboardView: View {
                 .accessibilityLabel("取消本段录音，保留已提交队列")
                 .accessibilityHidden(!model.isRecording)
             }
+            }
             Spacer(minLength: 4)
             HStack(spacing: 5) {
                 if let queue = model.queueText {
@@ -123,6 +127,27 @@ struct KeyboardView: View {
             .accessibilityIdentifier("voice.queueStatus")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func placeReviewContent(_ review: PlaceReviewDraft) -> some View {
+        VStack(spacing: 3) {
+            ScrollView {
+                Text(review.text).font(.caption).frame(maxWidth: .infinity, alignment: .leading)
+                ForEach(review.visibleSuggestions) { suggestion in
+                    HStack {
+                        Button("\(suggestion.original) → \(suggestion.replacement) \(suggestion.region)") {
+                            model.confirmPlace(suggestion.id)
+                        }.frame(minHeight: 44)
+                        Button("拒绝") { model.rejectPlace(suggestion.id) }.frame(minHeight: 44)
+                    }
+                }
+            }
+            HStack {
+                Button("撤销") { model.undoPlace() }.disabled(!review.canUndo)
+                Button("暂不插入") { model.retainPlaceDraftWithoutInsertion() }
+                Button("插入草稿") { model.insertPlaceDraft() }.fontWeight(.semibold)
+            }.font(.caption).frame(minHeight: 44)
+        }
     }
 
     private var voiceToolbar: some View {

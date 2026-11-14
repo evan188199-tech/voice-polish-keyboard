@@ -39,7 +39,8 @@ final class KeyboardViewModel: ObservableObject {
     private var visible = false
     @Published private(set) var appearance: UInt64 = 0
     private var submittedHere = Set<UUID>()
-    private var bufferedResults: [(UUID?, String)] = []
+    private var bufferedResults: [(UUID?, String, [PlaceNameSuggestion])] = []
+    @Published private(set) var placeReview: PlaceReviewDraft?
     /// Called only for jobs committed in the current keyboard appearance.
     /// UITextDocumentProxy has no insertion acknowledgement; retain every result first.
     var onTextReady: ((String) -> Void)?
@@ -49,6 +50,9 @@ final class KeyboardViewModel: ObservableObject {
         self.client = client
         self.defaults = defaults
         lastDeliveredText = defaults.string(forKey: "keyboard_last_result_v1")
+        if let data = defaults.data(forKey: "keyboard_place_review_v1") {
+            placeReview = try? JSONDecoder().decode(PlaceReviewDraft.self, from: data)
+        }
     }
 
     func appear() {
@@ -56,7 +60,7 @@ final class KeyboardViewModel: ObservableObject {
         visible = true
         appearance &+= 1
         submittedHere.removeAll()
-        for (_, text) in bufferedResults { receiveResult(text, autoInsert: false) }
+        for (_, text, _) in bufferedResults { receiveResult(text, autoInsert: false) }
         bufferedResults.removeAll()
     }
 
@@ -228,13 +232,45 @@ final class KeyboardViewModel: ObservableObject {
     }
 
     private func drainBufferedResults() {
-        guard !capture.isTransitioning else { return }
+        guard !capture.isTransitioning, placeReview == nil else { return }
         let results = bufferedResults
         bufferedResults.removeAll()
-        for (id, text) in results {
+        for (id, text, suggestions) in results {
+            if placeReview != nil {
+                bufferedResults.append((id, text, suggestions))
+                continue
+            }
             let autoInsert = id.map { submittedHere.remove($0) != nil } ?? false
-            receiveResult(text, autoInsert: autoInsert)
+            if !suggestions.isEmpty {
+                placeReview = PlaceReviewDraft(original: text, suggestions: suggestions)
+                persistPlaceReview()
+                receiveResult(text, autoInsert: false)
+                queueText = "地名候选待确认 · 后续结果按序等待"
+            } else { receiveResult(text, autoInsert: autoInsert) }
         }
+    }
+
+    func confirmPlace(_ id: UUID) { _ = placeReview?.confirm(id); persistPlaceReview() }
+    func rejectPlace(_ id: UUID) { placeReview?.reject(id); persistPlaceReview() }
+    func undoPlace() { placeReview?.undo(); persistPlaceReview() }
+    func insertPlaceDraft() {
+        guard let draft = placeReview, visible else { return }
+        receiveResult(draft.text, autoInsert: true)
+        placeReview = nil
+        persistPlaceReview()
+        drainBufferedResults()
+    }
+    func retainPlaceDraftWithoutInsertion() {
+        guard let draft = placeReview else { return }
+        receiveResult(draft.text, autoInsert: false)
+        placeReview = nil
+        persistPlaceReview()
+        drainBufferedResults()
+    }
+    private func persistPlaceReview() {
+        if let draft = placeReview, let data = try? JSONEncoder().encode(draft) {
+            defaults.set(data, forKey: "keyboard_place_review_v1")
+        } else { defaults.removeObject(forKey: "keyboard_place_review_v1") }
     }
 
     private func connectionFailed() {
@@ -537,11 +573,11 @@ final class KeyboardViewModel: ObservableObject {
             defer { if self.appearance == epoch { self.observer = nil } }
             while !Task.isCancelled, self.visible, self.appearance == epoch {
                 do {
-                    let response = try await self.client.send(.status)
+                    let response = try await self.client.send(self.placeReview == nil ? .status : .ping)
                     // Keep consumed text even if the keyboard disappeared during the request.
                     if response.response.outcome == .text, let text = response.response.text {
                         if self.visible, self.appearance == epoch {
-                            self.bufferedResults.append((response.response.jobID, text))
+                            self.bufferedResults.append((response.response.jobID, text, response.response.placeSuggestions ?? []))
                             self.drainBufferedResults()
                         } else {
                             self.receiveResult(text, autoInsert: false)
@@ -579,8 +615,11 @@ final class KeyboardViewModel: ObservableObject {
         currentState = status.state
         pendingCount = status.pendingCount ?? 0
         needsActivation = status.state == .inactive || status.errorCode == .micDenied || status.errorCode == .modelNotReady
+        if placeReview != nil { queueText = "地名候选待确认 · 后续结果按序等待" }
         // Queue progress must never masquerade as microphone activity.
-        if pendingCount > 0 {
+        if placeReview != nil {
+            queueText = "地名候选待确认 · 后续结果按序等待"
+        } else if pendingCount > 0 {
             switch status.state {
             case .polishing: queueText = "润色中 · 待交付 \(pendingCount) 段"
             case .ready: queueText = "等待插入 · \(pendingCount) 段"

@@ -119,6 +119,7 @@ struct BridgeResponse: Codable, Sendable {
     let jobID: UUID?
     /// Clipboard history returned by `syncClipboardHistory`.
     let clipboardEntries: [ClipboardEntry]?
+    let placeSuggestions: [PlaceNameSuggestion]?
 
     static func ok(
         status: BridgeStatus? = nil,
@@ -133,14 +134,16 @@ struct BridgeResponse: Codable, Sendable {
             message: message,
             errorCode: nil,
             jobID: jobID,
-            clipboardEntries: clipboardEntries
+            clipboardEntries: clipboardEntries,
+            placeSuggestions: nil
         )
     }
 
     static func text(
         _ value: String,
         status: BridgeStatus? = nil,
-        jobID: UUID? = nil
+        jobID: UUID? = nil,
+        placeSuggestions: [PlaceNameSuggestion]? = nil
     ) -> BridgeResponse {
         BridgeResponse(
             outcome: .text,
@@ -149,7 +152,8 @@ struct BridgeResponse: Codable, Sendable {
             message: nil,
             errorCode: nil,
             jobID: jobID,
-            clipboardEntries: nil
+            clipboardEntries: nil,
+            placeSuggestions: placeSuggestions
         )
     }
 
@@ -166,7 +170,8 @@ struct BridgeResponse: Codable, Sendable {
             message: msg,
             errorCode: code,
             jobID: jobID,
-            clipboardEntries: nil
+            clipboardEntries: nil,
+            placeSuggestions: nil
         )
     }
 
@@ -177,7 +182,8 @@ struct BridgeResponse: Codable, Sendable {
         message: "Bad token",
         errorCode: .unauthorized,
         jobID: nil,
-        clipboardEntries: nil
+        clipboardEntries: nil,
+        placeSuggestions: nil
     )
 }
 

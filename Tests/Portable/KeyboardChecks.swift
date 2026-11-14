@@ -8,13 +8,15 @@ actor MockKeyboardBridge: KeyboardBridgeServing {
     private var delayStart = false
     private var delayFinish = false
     private var failFinish = false
+    private var placeSuggestions = false
 
     func configure(startError: BridgeErrorCode? = nil, delayStart: Bool = false,
-                   delayFinish: Bool = false, failFinish: Bool = false) {
+                   delayFinish: Bool = false, failFinish: Bool = false, placeSuggestions: Bool = false) {
         self.startError = startError
         self.delayStart = delayStart
         self.delayFinish = delayFinish
         self.failFinish = failFinish
+        self.placeSuggestions = placeSuggestions
     }
     func seedRecording() { recording = true }
     func seedJob(_ text: String) { jobs.append((UUID(), text)) }
@@ -57,7 +59,9 @@ actor MockKeyboardBridge: KeyboardBridgeServing {
             // A later result is ready first; only the head may be consumed.
             if let (id, text) = jobs.first, let text {
                 jobs.removeFirst()
-                response = .text(text, status: status(), jobID: id)
+                let candidates = placeSuggestions ? PlaceNameMatcher.suggestions(in: text,
+                    entries: [PlaceNameEntry(name: "桂林", aliases: ["贵林"])], script: .simplified) : []
+                response = .text(text, status: status(), jobID: id, placeSuggestions: candidates)
             } else { response = .ok(status: status()) }
         default:
             response = .ok(status: status())
@@ -168,6 +172,25 @@ actor MockKeyboardBridge: KeyboardBridgeServing {
         check(attempts == 1 && queued == 1, "lost finish reply never resubmits committed audio")
         lost.disconnect()
 
+        let reviewBridge = MockKeyboardBridge()
+        await reviewBridge.configure(placeSuggestions: true)
+        let reviewModel = await makeModel(reviewBridge)
+        var reviewInsertions: [String] = []
+        reviewModel.onTextReady = { reviewInsertions.append($0) }
+        await reviewModel.toggleRecording(); await reviewModel.toggleRecording()
+        await reviewModel.toggleRecording(); await reviewModel.toggleRecording()
+        await reviewBridge.complete(0, text: "明天去贵林")
+        await reviewBridge.complete(1, text: "第二段")
+        await pause(650)
+        let waiting = await reviewBridge.jobCount()
+        check(reviewModel.placeReview != nil && reviewInsertions.isEmpty && waiting == 1, "candidate review pauses ordered delivery without inserting a guess")
+        reviewModel.confirmPlace(reviewModel.placeReview!.suggestions[0].id)
+        reviewModel.insertPlaceDraft()
+        reviewModel.insertPlaceDraft()
+        await pause()
+        check(reviewInsertions == ["明天去桂林", "第二段"], "confirmed draft inserts once before next queued result")
+        reviewModel.disconnect()
+
         var cursor = OrderedDeliveryCursor()
         check(!cursor.canDeliver(sequence: 2) && cursor.canDeliver(sequence: 1), "production ordered cursor blocks second result")
         cursor.advance()
@@ -176,6 +199,7 @@ actor MockKeyboardBridge: KeyboardBridgeServing {
         let decoded = try! JSONDecoder().decode(BridgeStatus.self, from: legacy)
         check(decoded.errorCode == nil && decoded.inputReady == nil, "bridge optional availability fields decode legacy snapshots")
         await ContentChecks.run()
+        await PlaceChecks.run()
         print("Keyboard logic checks completed (Apple frameworks replaced; no iOS UI/audio validation).")
     }
 }
