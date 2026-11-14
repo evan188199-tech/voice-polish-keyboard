@@ -381,9 +381,9 @@ final class KeyboardViewModel: ObservableObject {
     func appendCorrectionText(_ text: String) { guard correctionEditing else { return }; correctionManualText += text }
     func deleteCorrectionText() { guard correctionEditing, !correctionManualText.isEmpty else { return }; correctionManualText.removeLast() }
     func finishCorrectionEdit() { correctionEditing = false }
-    func chooseCorrection(_ candidate: String) { _ = correctionReview?.confirm(candidate: candidate) }
-    func chooseCorrectionOriginal() { _ = correctionReview?.keepOriginal() }
-    func chooseCorrectionManual(_ text: String) { _ = correctionReview?.confirmManual(text) }
+    func chooseCorrection(_ candidate: String) { correctionEditing = false; _ = correctionReview?.confirm(candidate: candidate) }
+    func chooseCorrectionOriginal() { correctionEditing = false; _ = correctionReview?.keepOriginal() }
+    func chooseCorrectionManual(_ text: String) { correctionEditing = false; _ = correctionReview?.confirmManual(text) }
     func undoCorrection() { _ = correctionReview?.undo() }
     func useCorrection() {
         guard visible, canExplicitlyInsert?() == true, let insert = onTextReady,

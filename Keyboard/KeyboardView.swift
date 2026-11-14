@@ -167,7 +167,7 @@ struct KeyboardView: View {
     private func correctionReviewContent(_ review: CorrectionReviewState) -> some View {
         VStack(spacing: 3) {
             ScrollView {
-                Text("原始转写：\(review.restoreOriginal())").font(.caption).frame(maxWidth: .infinity, alignment: .leading)
+                Text("收到的文字：\(review.restoreOriginal())").font(.caption).frame(maxWidth: .infinity, alignment: .leading)
                 if review.phase == .reviewing, let proposal = review.proposal {
                     Text(proposal.hint).font(.caption2)
                     if let draft = proposal.draft { Text("待核对：\(draft)").font(.caption) }
@@ -183,7 +183,7 @@ struct KeyboardView: View {
                 HStack {
                     Button("编辑") { model.startCorrectionEdit(); page = .abc }
                     Button("采用手动稿") { model.chooseCorrectionManual(model.correctionManualText) }
-                    Button("保留原文") { model.chooseCorrectionOriginal() }
+                    Button("保留收到的文字") { model.chooseCorrectionOriginal() }
                     Button("取消") { model.cancelCorrection() }
                 }.font(.caption).frame(minHeight: 44)
             } else if review.phase == .confirmed {

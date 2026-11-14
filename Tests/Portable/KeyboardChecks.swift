@@ -253,6 +253,19 @@ actor PortableTranslationProvider: TextTranslating {
         check(correctionOutputs == ["明天联系晓明。", "普通后续。"], "explicit correction inserts once and releases next result in order")
         correctionModel.disconnect()
 
+        let restorationDefaults = UserDefaults(suiteName: "correction-restore-\(UUID())")!
+        let restorationBridge = MockKeyboardBridge()
+        let restoration = await makeModel(restorationBridge, defaults: restorationDefaults)
+        await restoration.toggleRecording(); await restoration.toggleRecording()
+        await restorationBridge.complete(0, text: "联系小明，把小明改成晓明。")
+        await pause(600)
+        restoration.chooseCorrection("晓明")
+        restoration.disconnect()
+        let reconstructed = KeyboardViewModel(client: MockKeyboardBridge(), defaults: restorationDefaults)
+        check(reconstructed.correctionReview?.phase == .reviewing && reconstructed.correctionReview?.restoreOriginal() == "联系小明，把小明改成晓明。",
+              "restart restores raw review and requires a fresh explicit choice")
+        reconstructed.cancelCorrection()
+
         let legacyCorrectionBridge = MockKeyboardBridge()
         await legacyCorrectionBridge.configure(legacyText: "明天联系小明，把小明改成晓明。")
         let legacyCorrection = await makeModel(legacyCorrectionBridge)
