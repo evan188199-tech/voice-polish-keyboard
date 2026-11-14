@@ -5,7 +5,7 @@ enum FaithfulTextFormatter {
     static func isProtected(_ text: String) -> Bool {
         text.contains("`") || text.contains("/") || text.contains("\\")
             || text.contains("{") || text.contains("}") || text.contains("=")
-            || text.contains("\"") || text.contains("“") || text.contains("「") || text.contains("『")
+            || text.contains("\"") || text.contains("'") || text.contains("“") || text.contains("「") || text.contains("『")
     }
 
     static func format(_ text: String, mode: PolishMode) -> String {
@@ -73,11 +73,14 @@ struct DictationTextPreparation: Sendable {
     let original: String
     let body: String
     let strictLayout: Bool
+    let correctionNeedsConfirmation: Bool
 
     init(_ text: String, mode: PolishMode) {
         original = text
-        body = FaithfulTextFormatter.format(text, mode: mode)
-        strictLayout = mode != .askLLM && (text.count >= 120 || body != text || mode == .coding || FaithfulTextFormatter.isProtected(text))
+        let correction = SpokenCorrection.process(text, mode: mode)
+        body = FaithfulTextFormatter.format(correction.body, mode: mode)
+        correctionNeedsConfirmation = correction.needsConfirmation
+        strictLayout = mode != .askLLM && (text.count >= 120 || body != text || correction.needsConfirmation || mode == .coding || FaithfulTextFormatter.isProtected(text))
     }
 
     func accept(_ candidate: String) -> Bool {

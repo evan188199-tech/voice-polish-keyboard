@@ -10,6 +10,7 @@ struct DictationHistoryEntry: Codable, Identifiable, Hashable, Sendable {
     let transcriptionLatencyMs: Int?
     let polishingLatencyMs: Int?
     let errorMessage: String?
+    let processingNote: String?
 
     init(
         id: UUID = UUID(),
@@ -19,7 +20,8 @@ struct DictationHistoryEntry: Codable, Identifiable, Hashable, Sendable {
         mode: PolishMode,
         transcriptionLatencyMs: Int? = nil,
         polishingLatencyMs: Int? = nil,
-        errorMessage: String? = nil
+        errorMessage: String? = nil,
+        processingNote: String? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -29,6 +31,7 @@ struct DictationHistoryEntry: Codable, Identifiable, Hashable, Sendable {
         self.transcriptionLatencyMs = transcriptionLatencyMs
         self.polishingLatencyMs = polishingLatencyMs
         self.errorMessage = errorMessage
+        self.processingNote = processingNote
     }
 }
 

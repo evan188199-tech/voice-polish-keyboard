@@ -66,6 +66,7 @@
 		DA0120261114000000000001 /* VoiceKeyboardCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0120261114000000000003 /* VoiceKeyboardCapture.swift */; };
 		DA0120261114000000000002 /* VoiceKeyboardCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0120261114000000000003 /* VoiceKeyboardCapture.swift */; };
 		DA0220261114000000000001 /* FaithfulTextFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0220261114000000000002 /* FaithfulTextFormatter.swift */; };
+		DA0320261114000000000001 /* SpokenCorrection.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0320261114000000000002 /* SpokenCorrection.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -155,6 +156,7 @@
 		FD9BF459666C4FBB7AFA69A4 /* SherpaOnnxPackage */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SherpaOnnxPackage; path = Vendor/SherpaOnnxPackage; sourceTree = SOURCE_ROOT; };
 		DA0120261114000000000003 /* VoiceKeyboardCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceKeyboardCapture.swift; sourceTree = "<group>"; };
 		DA0220261114000000000002 /* FaithfulTextFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FaithfulTextFormatter.swift; sourceTree = "<group>"; };
+		DA0320261114000000000002 /* SpokenCorrection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpokenCorrection.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -232,6 +234,7 @@
 				74BF38A2C1A016749A3294DE /* LocalTextProcessor.swift */,
 				016C65BF0148E33EA696E3A0 /* OrderedDeliveryCursor.swift */,
 				DA0220261114000000000002 /* FaithfulTextFormatter.swift */,
+				DA0320261114000000000002 /* SpokenCorrection.swift */,
 				3305F071C6EEA40A03F26942 /* PolishMode.swift */,
 				4BCEE758CC4BA2F9D6D92719 /* SpeechTranscribing.swift */,
 				4C6FFBE459AAD43F9EBF3FC7 /* StyleProfile.swift */,
@@ -454,6 +457,7 @@
 				B177B7736D101F78A487C7D9 /* LocalTextProcessor.swift in Sources */,
 				3E33EE046D9B191CF193BA0A /* OrderedDeliveryCursor.swift in Sources */,
 				DA0220261114000000000001 /* FaithfulTextFormatter.swift in Sources */,
+				DA0320261114000000000001 /* SpokenCorrection.swift in Sources */,
 				E827F23053F6B430DE892C3A /* PolishMode.swift in Sources */,
 				8249E7DF06A518EB4031B994 /* SettingsView.swift in Sources */,
 				9EDFF8DB65083E79ED20F37A /* ShiftState.swift in Sources */,

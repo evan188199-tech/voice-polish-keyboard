@@ -14,6 +14,7 @@ final class VoiceSessionCoordinator: ObservableObject {
     @Published private(set) var lastResult: String?
     /// True when polish was attempted and failed (user sees original).
     @Published private(set) var lastPolishFailed = false
+    @Published private(set) var correctionNeedsConfirmation = false
     @Published private(set) var downloadProgress: Double?
     @Published private(set) var preparePhase: String?
     @Published private(set) var modelFilesPresent = false
@@ -151,7 +152,7 @@ final class VoiceSessionCoordinator: ObservableObject {
             askFollowUpArmed: isAskFollowUpArmed,
             errorCode: lastErrorCode,
             inputReady: isInputReady,
-            resultNotice: lastPolishFailed ? "云端不可用 · 已保留完整本地结果" : nil
+            resultNotice: correctionNeedsConfirmation ? "纠字目标不明确 · 原文已保留，请在历史核对" : (lastPolishFailed ? "云端不可用 · 已保留完整本地结果" : nil)
         )
     }
 
@@ -351,6 +352,7 @@ final class VoiceSessionCoordinator: ObservableObject {
         lastTranscription = nil
         lastPolished = nil
         lastPolishFailed = false
+        correctionNeedsConfirmation = false
         clearCompareFields()
         inputLevel = 0
         lastErrorCode = nil
@@ -609,6 +611,7 @@ final class VoiceSessionCoordinator: ObservableObject {
         lastTranscription = nil
         lastPolished = nil
         lastPolishFailed = false
+        correctionNeedsConfirmation = false
         lastRecoverableResult = nil
         clearCompareFields()
     }
@@ -1286,7 +1289,8 @@ final class VoiceSessionCoordinator: ObservableObject {
                 mode: job.snapshot.polishMode,
                 transcriptionLatencyMs: job.primaryLatencyMs,
                 polishingLatencyMs: job.polishLatencyMs,
-                errorMessage: job.errorMessage
+                errorMessage: job.errorMessage,
+                processingNote: job.preparedText?.correctionNeedsConfirmation == true ? "纠字目标不明确，已保留原文；请人工核对。" : nil
             )
         )
 
@@ -1326,6 +1330,7 @@ final class VoiceSessionCoordinator: ObservableObject {
         lastTranscription = job.localText
         lastPolished = job.polishedText
         lastPolishFailed = job.polishFailed
+        correctionNeedsConfirmation = job.preparedText?.correctionNeedsConfirmation ?? false
         lastResult = job.finalText
         lastRecoverableResult = job.finalText
         if let ms = job.primaryLatencyMs {

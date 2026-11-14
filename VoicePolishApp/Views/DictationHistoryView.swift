@@ -21,6 +21,9 @@ struct DictationHistoryView: View {
                                         .foregroundStyle(.secondary)
                                         .lineLimit(2)
                                 }
+                                if let note = entry.processingNote {
+                                    Text(note).font(.caption).foregroundStyle(.secondary)
+                                }
                                 if let error = entry.errorMessage {
                                     Text(error).font(.caption).foregroundStyle(.orange)
                                 }

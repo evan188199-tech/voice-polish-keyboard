@@ -10,7 +10,7 @@ for module in Combine UIKit; do
 done
 sources=(Shared/Constants.swift Shared/VoiceKeyboardCapture.swift Shared/Core/ClipboardHistory.swift
   Shared/Core/ChineseScriptConverter.swift Shared/Core/PolishMode.swift Shared/Core/OrderedDeliveryCursor.swift
-  Shared/Core/FaithfulTextFormatter.swift Shared/Core/LocalTextProcessor.swift Shared/Core/TextPolishing.swift
+  Shared/Core/SpokenCorrection.swift Shared/Core/FaithfulTextFormatter.swift Shared/Core/LocalTextProcessor.swift Shared/Core/TextPolishing.swift
   Tests/Portable/ContentChecks.swift
   Shared/Protocol/WireMessage.swift Keyboard/KeyboardBridgeClient.swift Keyboard/KeyboardViewModel.swift
   Tests/Portable/TransportStub.swift Tests/Portable/KeyboardChecks.swift)
