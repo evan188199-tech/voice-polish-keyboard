@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 @main struct ClipboardChecks {
     @MainActor static func check(_ condition: @autoclosure () -> Bool, _ label: String) {
@@ -6,6 +7,18 @@ import Foundation
         print("PASS: \(label)")
     }
     @MainActor static func main() async {
+        let fakeBoard = UIPasteboard.general
+        let captureDefaults = UserDefaults(suiteName: "private-copy-fixture-\(UUID())")!
+        fakeBoard.string = "fictional private term"
+        fakeBoard.simulatedTypes = [ClipboardHistoryPolicy.transientPrivateType, "public.utf8-plain-text"]
+        let beforeRead = fakeBoard.stringReadCount
+        check(ClipboardCapture.captureIfNeeded(defaults: captureDefaults) == nil && fakeBoard.stringReadCount == beforeRead,
+              "private marker blocks clipboard capture before reading text")
+        check(ClipboardHistoryStore.load(defaults: captureDefaults).isEmpty, "private copy never enters clipboard history")
+        fakeBoard.simulatedTypes = ["public.utf8-plain-text"]
+        fakeBoard.string = "fictional ordinary text"
+        check(ClipboardCapture.captureIfNeeded(defaults: captureDefaults)?.text == "fictional ordinary text",
+              "ordinary clipboard capture remains available")
         let defaults = UserDefaults(suiteName: "clipboard-fixture-\(UUID())")!
         let mirror = ClipboardMirrorStore(defaults: defaults)
         let entries = [ClipboardEntry(text: "fictional A"), ClipboardEntry(text: "fictional B")]

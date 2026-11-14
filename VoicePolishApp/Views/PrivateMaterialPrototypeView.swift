@@ -154,7 +154,8 @@ struct PrivateMaterialPrototypeView: View {
     }
     @State private var ownedPasteboardChange: Int?
     private func copyLocalText(_ text: String) {
-        UIPasteboard.general.setItems([[UTType.utf8PlainText.identifier: text]],
+        UIPasteboard.general.setItems([[UTType.utf8PlainText.identifier: text,
+                                        ClipboardHistoryPolicy.transientPrivateType: Data([1])]],
             options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(60)])
         ownedPasteboardChange = UIPasteboard.general.changeCount
         message = "已复制到本机剪贴板，60 秒后过期；不会自动发送。"

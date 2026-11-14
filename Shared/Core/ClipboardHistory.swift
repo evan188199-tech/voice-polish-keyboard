@@ -24,6 +24,8 @@ enum ClipboardHistoryPolicy {
     static let maxTextLength = 2000
     /// Entries older than this are pruned on load/append.
     static let expirationDays: TimeInterval = 7
+    /// Explicitly copied private material is never imported into keyboard history.
+    static let transientPrivateType = "com.voicepolish.transient-private"
 }
 
 /// Keyboard-side authoritative store. Backed by the extension's own UserDefaults.
