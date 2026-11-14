@@ -3,14 +3,19 @@ import Foundation
 final class FictionalIndexStore: PrivateIndexStorage, @unchecked Sendable {
     private let lock = NSLock()
     private var data: [PrivateIndexScope: PrivateIndexDocument] = [:]
+    private var revoked = Set<PrivateIndexScope>()
+    private var refuseMarker = false
     private var refuseDelete = false
     private var refuseSave = false
+    func setRefuseMarker(_ value: Bool) { lock.withLock { refuseMarker = value } }
     func setRefuseSave(_ value: Bool) { lock.withLock { refuseSave = value } }
     func setRefuseDelete(_ value: Bool) { lock.withLock { refuseDelete = value } }
     func load(scope: PrivateIndexScope) throws -> PrivateIndexDocument? { lock.withLock { data[scope] } }
     func save(_ document: PrivateIndexDocument) throws {
         try lock.withLock { if refuseSave { throw PrivateIndexError.unavailable }; data[document.scope] = document }
     }
+    func markRevoked(scope: PrivateIndexScope) throws { try lock.withLock { if refuseMarker { throw PrivateIndexError.unavailable }; _ = revoked.insert(scope) } }
+    func isRevoked(scope: PrivateIndexScope) throws -> Bool { lock.withLock { revoked.contains(scope) } }
     func remove(scope: PrivateIndexScope) throws {
         try lock.withLock { if refuseDelete { throw PrivateIndexError.unavailable }; data[scope] = nil }
     }
@@ -57,7 +62,7 @@ struct FictionalPublisherTransport: PrivateSnapshotTransport {
 @MainActor enum PrivateIndexChecks {
     static func run() async {
         let check = KeyboardChecks.check
-        let a = PrivateIndexScope(accountID: "fiction-A", sourceID: "fiction-source")
+        var a = PrivateIndexScope(accountID: "fiction-A", sourceID: "fiction-source")
         let b = PrivateIndexScope(accountID: "fiction-B", sourceID: "fiction-source")
         check(!PrivateIndexScope(accountID: "person@example.test", sourceID: "fiction-source").isValid &&
               !PrivateIndexScope(accountID: "fiction-A", sourceID: "https://example.test/private").isValid,
@@ -65,6 +70,24 @@ struct FictionalPublisherTransport: PrivateSnapshotTransport {
         let item = PrivateIndexItem(id: UUID(), kind: .route, title: "虚构路线甲")
         let forbidden = PrivateIndexItem(id: UUID(), kind: .term, title: "https://fiction.invalid/internal")
         check(!forbidden.isValid, "private index refuses URL-like content as a search term")
+        let markerStore = FictionalIndexStore()
+        let markerScope = PrivateIndexScope(accountID: "marker-failure-fixture", sourceID: "fiction")
+        let markerIndex = PrivateIndexCoordinator(storage: markerStore)
+        try! await markerIndex.activate(markerScope)
+        try! await markerIndex.replace([item], expectedScope: markerScope)
+        markerStore.setRefuseMarker(true)
+        do { try await markerIndex.revoke(markerScope); check(false, "failed marker must not report success") }
+        catch { check(true, "failed durable marker is reported and does not claim revocation") }
+        do { try await markerIndex.activate(markerScope); check(false, "failed marker cannot reopen in the same process") }
+        catch { check(true, "failed marker remains closed in the current coordinator") }
+        let lostIntent = PrivateIndexCoordinator(storage: markerStore)
+        try! await lostIntent.activate(markerScope)
+        let stillPresent = try! await lostIntent.search("路线", expectedScope: markerScope)
+        check(stillPresent == [item], "unwritten marker cannot guarantee revocation after restart")
+        markerStore.setRefuseMarker(false)
+        try! await markerIndex.retryRemoval(markerScope)
+        do { _ = try await lostIntent.search("路线", expectedScope: markerScope); check(false, "retry must block cached peer") }
+        catch { check(true, "retry persists tombstone and blocks cached coordinator") }
         let store = FictionalIndexStore()
         let index = PrivateIndexCoordinator(storage: store)
         try! await index.activate(a)
@@ -92,11 +115,13 @@ struct FictionalPublisherTransport: PrivateSnapshotTransport {
         do { try await reopened.replace([item, item], expectedScope: a); check(false, "duplicate IDs must fail") }
         catch { check(true, "duplicate private index identifiers are rejected") }
         try! await reopened.revoke(a)
-        try! await reopened.activate(a)
-        let afterDelete = try! await reopened.search("路线", expectedScope: a)
-        check(afterDelete.isEmpty, "revocation deletes the mocked persisted index")
+        do { try await reopened.activate(a); check(false, "revoked scope must remain closed") }
+        catch { check((try? store.load(scope: a)) == nil, "revocation deletes index and permanently closes old scope") }
+        a = PrivateIndexScope(accountID: "fiction-A-new", sourceID: "fiction-source")
         try! await index.activate(a)
         try! await index.replace([item], expectedScope: a)
+        let observing = PrivateIndexCoordinator(storage: store)
+        try! await observing.activate(a)
         store.setRefuseDelete(true)
         do { try await index.revoke(a); check(false, "delete failure must be visible") }
         catch { check(true, "failed deletion is reported rather than claiming success") }
@@ -104,8 +129,21 @@ struct FictionalPublisherTransport: PrivateSnapshotTransport {
         catch { check(true, "failed revoke still clears active in-memory access") }
         do { try await index.activate(a); check(false, "failed deletion cannot reopen scope") }
         catch { check(true, "failed deletion blocks reopening until retry") }
+        let afterRestart = PrivateIndexCoordinator(storage: store)
+        do { try await afterRestart.activate(a); check(false, "restart must not expose pending deletion") }
+        catch { check(true, "persisted revocation survives coordinator restart and failed retry") }
+        do { _ = try await observing.search("路线", expectedScope: a); check(false, "other active coordinator must respect marker") }
+        catch { check(true, "active coordinator checks persistent revocation before search") }
+        let blockedPublisher = PrivateSnapshotPublisher(index: observing, verifier: FictionalTrustedPeer())
+        do { _ = try await blockedPublisher.make(sessionID: UUID(), scope: a, selectedIDs: [item.id]); check(false, "revoked snapshot must fail") }
+        catch { check(true, "persisted revocation blocks a cached coordinator snapshot") }
         store.setRefuseDelete(false)
-        try! await index.retryRemoval(a)
+        try! await afterRestart.retryRemoval(a)
+        do { try await afterRestart.activate(a); check(false, "old scope must remain revoked") }
+        catch { check((try? store.load(scope: a)) == nil, "restart retries deletion and keeps old scope revoked") }
+        do { _ = try await observing.search("路线", expectedScope: a); check(false, "old cached scope must stay invalid") }
+        catch { check(true, "completed deletion never revives an older session") }
+        a = PrivateIndexScope(accountID: "fiction-A-reenrolled", sourceID: "fiction-source")
         try! await index.activate(a)
         let afterRetry = try! await index.search("路线", expectedScope: a)
         check(afterRetry.isEmpty, "successful retry completes failed revocation")

@@ -28,6 +28,8 @@ struct PrivateMaterialPrototypeView: View {
             Section("接入状态") {
                 Text(session.status)
                 Button("真实账号（尚未接入）") { session.connectProduction() }
+                Text("Notion 尚未连接：需要用户选择来源和字段、授权只读访问并配置安全凭据。当前不能预览或检索真实来源，也不会自动同步。")
+                    .font(.caption).foregroundStyle(.secondary)
                 HStack {
                     Button("演示工作区 A") { switchDemo("demo-A") }.disabled(indexBusy)
                     Button("演示工作区 B") { switchDemo("demo-B") }.disabled(indexBusy)
@@ -64,7 +66,7 @@ struct PrivateMaterialPrototypeView: View {
                     Button("保存已确认词汇到本机") { saveLocalIndex() }
                     Button("载入本机词汇") { loadLocalIndex() }
                 }.disabled(indexBusy || session.account == nil)
-                Text("手动保存到本机受保护索引；不默认同步。注销/撤权会尝试删除本账号索引。切号只清内存，不删除另一个已保存账号。")
+                Text("手动保存到本机受保护索引；不默认同步。注销/撤权会尝试删除本账号索引，并永久阻止旧索引标识重新启用；重新授权流程尚未接入。切号只清内存，不删除另一个已保存账号。")
                     .font(.caption).foregroundStyle(.secondary)
                 ForEach(session.searchTerms(search)) { term in
                     HStack {

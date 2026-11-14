@@ -14,6 +14,7 @@ final class ProtectedPrivateIndexStorage: PrivateIndexStorage, @unchecked Sendab
     func load(scope: PrivateIndexScope) throws -> PrivateIndexDocument? {
         try Self.lock.withLock {
             guard scope.isValid else { throw PrivateIndexError.invalid }
+            guard try !revokedUnlocked(scope) else { throw PrivateIndexError.unavailable }
             let file = try fileURL(scope)
             guard FileManager.default.fileExists(atPath: file.path) else { return nil }
             guard let key = try existingKey(scope) else { throw PrivateIndexError.unavailable }
@@ -30,6 +31,7 @@ final class ProtectedPrivateIndexStorage: PrivateIndexStorage, @unchecked Sendab
     func save(_ document: PrivateIndexDocument) throws {
         try Self.lock.withLock {
             guard document.isValid else { throw PrivateIndexError.invalid }
+            guard try !revokedUnlocked(document.scope) else { throw PrivateIndexError.unavailable }
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             var protectedDirectory = directory
             var metadata = URLResourceValues(); metadata.isExcludedFromBackup = true
@@ -61,6 +63,33 @@ final class ProtectedPrivateIndexStorage: PrivateIndexStorage, @unchecked Sendab
             guard status == errSecSuccess || status == errSecItemNotFound else { throw PrivateIndexError.unavailable }
             let file = try fileURL(scope)
             if FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) }
+        }
+    }
+    func markRevoked(scope: PrivateIndexScope) throws {
+        try Self.lock.withLock {
+            guard scope.isValid else { throw PrivateIndexError.invalid }
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            // Atomic marker contains no private content. Data protection means a locked
+            // device can prevent marking; that error must never be called success.
+            try Data("revoked".utf8).write(to: markerURL(scope), options: [.atomic, .completeFileProtection])
+            var marker = try markerURL(scope)
+            var metadata = URLResourceValues(); metadata.isExcludedFromBackup = true
+            try marker.setResourceValues(metadata)
+        }
+    }
+    func isRevoked(scope: PrivateIndexScope) throws -> Bool {
+        try Self.lock.withLock { try revokedUnlocked(scope) }
+    }
+    private func markerURL(_ scope: PrivateIndexScope) throws -> URL {
+        directory.appendingPathComponent(try identifier(scope)).appendingPathExtension("revoked")
+    }
+    private func revokedUnlocked(_ scope: PrivateIndexScope) throws -> Bool {
+        guard scope.isValid else { throw PrivateIndexError.invalid }
+        do { _ = try FileManager.default.attributesOfItem(atPath: markerURL(scope).path); return true }
+        catch let error as NSError {
+            if error.domain == NSCocoaErrorDomain && error.code == NSFileReadNoSuchFileError { return false }
+            if error.domain == NSPOSIXErrorDomain && error.code == 2 { return false }
+            throw PrivateIndexError.unavailable
         }
     }
     private func identifier(_ scope: PrivateIndexScope) throws -> String {

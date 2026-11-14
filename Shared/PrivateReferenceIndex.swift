@@ -39,11 +39,16 @@ protocol PrivateIndexStorage: Sendable {
     func load(scope: PrivateIndexScope) throws -> PrivateIndexDocument?
     func save(_ document: PrivateIndexDocument) throws
     func remove(scope: PrivateIndexScope) throws
+    /// Persist before deletion; do not clear until removal is complete.
+    func markRevoked(scope: PrivateIndexScope) throws
+    func isRevoked(scope: PrivateIndexScope) throws -> Bool
 }
 struct DisabledPrivateIndexStorage: PrivateIndexStorage {
     func load(scope: PrivateIndexScope) throws -> PrivateIndexDocument? { throw PrivateIndexError.unavailable }
     func save(_ document: PrivateIndexDocument) throws { throw PrivateIndexError.unavailable }
     func remove(scope: PrivateIndexScope) throws { throw PrivateIndexError.unavailable }
+    func markRevoked(scope: PrivateIndexScope) throws { throw PrivateIndexError.unavailable }
+    func isRevoked(scope: PrivateIndexScope) throws -> Bool { throw PrivateIndexError.unavailable }
 }
 
 /// Calls into storage are synchronous and serialized by this actor, including revoke.
@@ -52,18 +57,25 @@ actor PrivateIndexCoordinator {
     private var activeScope: PrivateIndexScope?
     private var current: PrivateIndexDocument?
     private var pendingRemoval = Set<PrivateIndexScope>()
+    private var markerWriteFailed = Set<PrivateIndexScope>()
     private var activationID = UUID()
     init(storage: any PrivateIndexStorage = DisabledPrivateIndexStorage()) { self.storage = storage }
     func activate(_ scope: PrivateIndexScope) throws {
         activeScope = nil; current = nil; activationID = UUID()
         guard scope.isValid else { throw PrivateIndexError.invalid }
-        guard !pendingRemoval.contains(scope) else { throw PrivateIndexError.unavailable }
+        if pendingRemoval.contains(scope) { try retryRemoval(scope) }
+        if try storage.isRevoked(scope: scope) {
+            pendingRemoval.insert(scope)
+            try retryRemoval(scope)
+            throw PrivateIndexError.unavailable
+        }
         let loaded = try storage.load(scope: scope)
         if let loaded, (!loaded.isValid || loaded.scope != scope) { throw PrivateIndexError.wrongScope }
         activeScope = scope; current = loaded
     }
     func replace(_ items: [PrivateIndexItem], expectedScope: PrivateIndexScope) throws {
         guard activeScope == expectedScope else { throw PrivateIndexError.wrongScope }
+        guard try !storage.isRevoked(scope: expectedScope) else { throw PrivateIndexError.unavailable }
         guard (current?.revision ?? 0) < UInt64.max else { throw PrivateIndexError.invalid }
         let next = PrivateIndexDocument(scope: expectedScope, revision: (current?.revision ?? 0) + 1, items: items)
         guard next.isValid else { throw PrivateIndexError.invalid }
@@ -72,18 +84,22 @@ actor PrivateIndexCoordinator {
     }
     func lease(expectedScope: PrivateIndexScope) throws -> (id: UUID, document: PrivateIndexDocument?) {
         guard activeScope == expectedScope else { throw PrivateIndexError.wrongScope }
+        guard try !storage.isRevoked(scope: expectedScope) else { throw PrivateIndexError.unavailable }
         return (activationID, current)
     }
     func document(expectedScope: PrivateIndexScope) throws -> PrivateIndexDocument? {
         guard activeScope == expectedScope else { throw PrivateIndexError.wrongScope }
+        guard try !storage.isRevoked(scope: expectedScope) else { throw PrivateIndexError.unavailable }
         return current
     }
     func list(expectedScope: PrivateIndexScope) throws -> [PrivateIndexItem] {
         guard activeScope == expectedScope else { throw PrivateIndexError.wrongScope }
+        guard try !storage.isRevoked(scope: expectedScope) else { throw PrivateIndexError.unavailable }
         return current?.items ?? []
     }
     func search(_ query: String, expectedScope: PrivateIndexScope) throws -> [PrivateIndexItem] {
         guard activeScope == expectedScope else { throw PrivateIndexError.wrongScope }
+        guard try !storage.isRevoked(scope: expectedScope) else { throw PrivateIndexError.unavailable }
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, text.utf8.count <= 256 else { return [] }
         return (current?.items ?? []).filter { $0.title.localizedCaseInsensitiveContains(text) }
@@ -98,11 +114,25 @@ actor PrivateIndexCoordinator {
         // Drop a matching live view before deletion; a failure is visible to caller.
         if activeScope == scope { activeScope = nil; current = nil; activationID = UUID() }
         pendingRemoval.insert(scope)
+        do { try storage.markRevoked(scope: scope); markerWriteFailed.remove(scope) }
+        catch { markerWriteFailed.insert(scope); throw error }
         try retryRemoval(scope)
     }
     func retryRemoval(_ scope: PrivateIndexScope) throws {
-        guard pendingRemoval.contains(scope) else { throw PrivateIndexError.wrongScope }
+        guard scope.isValid else { throw PrivateIndexError.invalid }
+        // Re-create the marker if its initial write failed, before attempting deletion.
+        if try !storage.isRevoked(scope: scope) {
+            guard markerWriteFailed.contains(scope) else {
+                pendingRemoval.remove(scope)
+                return
+            }
+            try storage.markRevoked(scope: scope)
+            markerWriteFailed.remove(scope)
+        }
         try storage.remove(scope: scope)
+        // Keep the tombstone permanently: older in-memory coordinators must not
+        // regain access after a new account/session is created. Re-enrol using a
+        // fresh opaque scope only after explicit authorization.
         pendingRemoval.remove(scope)
     }
 }

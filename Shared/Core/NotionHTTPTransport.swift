@@ -8,36 +8,97 @@ import FoundationNetworking
 protocol NotionCredentialProvider: Sendable {
     func credential(for sourceID: UUID) async throws -> String?
 }
-private final class NotionRedirectBlocker: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+/// Enforces a cumulative cap before appending each received chunk.
+struct BoundedNotionBody {
+    static let limit = 1_048_576
+    private(set) var data = Data()
+    mutating func append(_ chunk: Data) throws {
+        guard chunk.count <= Self.limit - data.count else { throw NotionPreviewError.invalidResponse }
+        data.append(chunk)
+    }
+}
+
+private final class NotionBoundedRequest: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<NotionQueryResponse, Error>?
+    private var task: URLSessionDataTask?
+    private var cancelled = false
+    private var body = BoundedNotionBody()
+    private var response: HTTPURLResponse?
+    func run(_ request: URLRequest) async throws -> NotionQueryResponse {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let configuration = URLSessionConfiguration.ephemeral
+                configuration.urlCache = nil; configuration.httpCookieStorage = nil
+                configuration.httpShouldSetCookies = false
+                configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+                configuration.timeoutIntervalForRequest = 20
+                configuration.timeoutIntervalForResource = 30
+                let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+                let task = session.dataTask(with: request)
+                let start = lock.withLock {
+                    if cancelled { return false }
+                    self.continuation = continuation; self.task = task; return true
+                }
+                if start { task.resume() }
+                else { session.invalidateAndCancel(); continuation.resume(throwing: CancellationError()) }
+            }
+        } onCancel: { self.cancel() }
+    }
+    private func cancel() {
+        let task = lock.withLock { cancelled = true; return self.task }
+        task?.cancel()
+    }
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
         completionHandler(nil)
     }
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+                    completionHandler: @escaping @Sendable (URLSession.ResponseDisposition) -> Void) {
+        guard let http = response as? HTTPURLResponse,
+              response.expectedContentLength < 0 || response.expectedContentLength <= Int64(BoundedNotionBody.limit) else {
+            completionHandler(.cancel); finish(session, result: .failure(NotionPreviewError.invalidResponse)); return
+        }
+        lock.withLock { self.response = http }
+        completionHandler(.allow)
+    }
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        let ok = lock.withLock { () -> Bool in
+            do { try body.append(data); return true } catch { return false }
+        }
+        if !ok { dataTask.cancel(); finish(session, result: .failure(NotionPreviewError.invalidResponse)) }
+    }
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        let result: Result<NotionQueryResponse, Error> = lock.withLock {
+            if cancelled { return .failure(CancellationError()) }
+            guard error == nil, let response else { return .failure(NotionPreviewError.unavailable) }
+            let retry = response.value(forHTTPHeaderField: "Retry-After").flatMap(TimeInterval.init)
+            return .success(NotionQueryResponse(status: response.statusCode, retryAfter: retry, body: body.data))
+        }
+        finish(session, result: result)
+    }
+    private func finish(_ session: URLSession, result: Result<NotionQueryResponse, Error>) {
+        let (continuation, finalResult): (CheckedContinuation<NotionQueryResponse, Error>?, Result<NotionQueryResponse, Error>) = lock.withLock {
+            let c = self.continuation; self.continuation = nil; self.task = nil
+            return (c, cancelled ? .failure(CancellationError()) : result)
+        }
+        continuation?.resume(with: finalResult)
+        session.finishTasksAndInvalidate()
+    }
 }
 
-/// Configurable REST transport, deliberately not instantiated by app UI.
-/// Redirects, cookies and caches are disabled; errors never include source IDs or credentials.
+/// Opt-in transport. No real credential or live session is configured by the app.
 struct NotionHTTPTransport: NotionQueryTransport {
     private let credentialProvider: any NotionCredentialProvider
-    private let session: URLSession
-    init(credentialProvider: any NotionCredentialProvider) {
-        self.credentialProvider = credentialProvider
-        let config = URLSessionConfiguration.ephemeral
-        config.urlCache = nil; config.httpCookieStorage = nil; config.httpShouldSetCookies = false
-        config.requestCachePolicy = .reloadIgnoringLocalCacheData
-        self.session = URLSession(configuration: config, delegate: NotionRedirectBlocker(), delegateQueue: nil)
-    }
+    init(credentialProvider: any NotionCredentialProvider) { self.credentialProvider = credentialProvider }
     func query(_ query: NotionQueryRequest) async throws -> NotionQueryResponse {
         guard let credential = try await credentialProvider.credential(for: query.sourceID),
               !credential.isEmpty, credential.utf8.count <= 4096,
               credential.rangeOfCharacter(from: .controlCharacters) == nil else { throw NotionPreviewError.permission }
         let request = try Self.request(query, credential: credential)
-        do {
-            let (body, response) = try await session.data(for: request)
-            guard let response = response as? HTTPURLResponse, body.count <= 1_048_576 else { throw NotionPreviewError.invalidResponse }
-            let retry = response.value(forHTTPHeaderField: "Retry-After").flatMap(TimeInterval.init)
-            return NotionQueryResponse(status: response.statusCode, retryAfter: retry, body: body)
-        } catch is CancellationError { throw CancellationError() }
+        try Task.checkCancellation()
+        do { return try await NotionBoundedRequest().run(request) }
+        catch is CancellationError { throw CancellationError() }
         catch let error as NotionPreviewError { throw error }
         catch { throw NotionPreviewError.unavailable }
     }

@@ -102,6 +102,15 @@ actor FictionalDelay {
         let badRate = FictionalNotionTransport([NotionQueryResponse(status: 429, retryAfter: nil, body: Data())])
         do { _ = try await NotionPrivatePreviewReader(transport: badRate).preview(sourceID: source, fields: [field]); check(false, "missing retry-after must fail") }
         catch { check((error as? NotionPreviewError) == .rateLimited, "rate limiting without safe retry time stops") }
+        var bounded = BoundedNotionBody()
+        try! bounded.append(Data(repeating: 1, count: BoundedNotionBody.limit - 1))
+        try! bounded.append(Data([2]))
+        check(bounded.data.count == BoundedNotionBody.limit, "stream accepts exactly the cumulative byte limit")
+        do { try bounded.append(Data([3])); check(false, "oversized next chunk must fail") }
+        catch { check(bounded.data.count == BoundedNotionBody.limit, "stream rejects oversize before appending") }
+        var oversized = BoundedNotionBody()
+        do { try oversized.append(Data(repeating: 7, count: BoundedNotionBody.limit + 1)); check(false, "oversized first chunk must fail") }
+        catch { check(oversized.data.isEmpty, "oversize first chunk leaves bounded buffer empty") }
         let request = NotionQueryRequest(sourceID: source, propertyIDs: ["fixture-prop"], cursor: "fiction-cursor", pageSize: 100)
         let prepared = try! NotionHTTPTransport.request(request, credential: "fictional-token")
         let components = URLComponents(url: prepared.url!, resolvingAgainstBaseURL: false)!
