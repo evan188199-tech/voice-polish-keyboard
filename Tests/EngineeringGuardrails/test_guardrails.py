@@ -14,7 +14,7 @@ def load(name):
     module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
     return module
 
-gate, doctor = load('verify_original_branch'), load('doctor')
+gate, doctor, startup = load('verify_original_branch'), load('doctor'), load('startup_check')
 
 class GateTests(unittest.TestCase):
     def test_exact_remote_only_and_no_writes(self):
@@ -65,5 +65,16 @@ class DoctorTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True): self.assertEqual(doctor.proxy_probe(), 'not_configured')
         with patch.dict(os.environ, {'HTTPS_PROXY':'http://localhost:1234'}, clear=True), patch.object(doctor.socket, 'create_connection', return_value=Conn()):
             self.assertEqual(doctor.proxy_probe(), 'reachable')
+
+class StartupTests(unittest.TestCase):
+    def test_rules_are_hashed_and_missing_tools_are_unknown(self):
+        with patch.object(startup, 'git', side_effect=['branch-name', 'a' * 40, '']), \
+             patch.object(startup, 'version', return_value='not_available'):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(startup.main(), 0)
+            self.assertIn('AGENTS.md sha256:', out.getvalue())
+            self.assertIn('HEAD: ' + 'a' * 40, out.getvalue())
+            self.assertIn('automatic rule loading by each tool is not established', out.getvalue())
 
 if __name__ == '__main__': unittest.main()

@@ -2,6 +2,7 @@
 
 | Capability | Command | Scope and acceptance | Still requires separate validation |
 | --- | --- | --- | --- |
+| Handoff | `python3 scripts/startup_check.py` | Reads rule bytes and reports their hash, branch, HEAD, clean/dirty state, and available Codex/Cursor versions. Ownership is coordinated explicitly. | Automatic rule loading by any tool must be verified in that tool; absence is reported, never guessed. |
 | Connectivity | `python3 scripts/doctor.py` | Read-only observations for environment indicators, configured proxy endpoint TCP reachability, direct DNS/TCP/TLS, existing `gh` status, API and Git ref reading; output contains statuses only. A failed check is not a diagnosis. | Actual environment; proxy TLS path, CA configuration and sandbox restrictions need separate investigation. No settings are changed. |
 | Original branch | `python3 scripts/verify_original_branch.py` | Fixed repository, branch and full SHA; requires clean exact local HEAD and exact remote ref before a completion statement. It never pushes. | Actual authorized identity, network and remote state. Another SHA or branch requires a separately reviewed gate. |
 | Device installation | `SOURCE_COMMIT=<full-sha> DEVELOPMENT_TEAM=<team> scripts/install_device.sh <device-id>` | Requires clean matching checkout, exact target, isolated build output, matching bundle and signing team; no automatic provisioning update or device registration. Rechecks source after build. `scripts/install_device.sh list` is read-only. | Actual Xcode, code signing, device IDs and installation. The source check covers Git-visible changes, not ignored vendor dependencies or a reproducible-build proof. A successful installation does not prove launch or device acceptance. The XcodeGen project retains its existing default team for other build paths. |
@@ -9,3 +10,5 @@
 | Regression checks | `python3 Tests/InstallSafety/test_install_safety.py` and `python3 Tests/EngineeringGuardrails/test_guardrails.py` | Fake Xcode/device/Git/network behavior exercises fail-closed paths and successful paths; no external write or device access. | Not Xcode, actual network, a signed build, or a real iPhone. |
 
 Run commands only within the available environment's network and filesystem permissions. Do not disable TLS verification or print credentials. For real tests record the commit, device, SDK, each stage and results separately.
+
+Device safety is tracked in [issue #7](https://github.com/evan188199-tech/voice-polish-keyboard/issues/7). The two proposed Cursor #2 test paths remain reserved pending a response; this is not an agreement.
