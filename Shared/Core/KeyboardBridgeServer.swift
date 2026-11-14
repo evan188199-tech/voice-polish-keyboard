@@ -59,13 +59,23 @@ actor KeyboardBridgeServer {
                 BridgeServer.send(response: WireResponse(requestID: message.requestID, response: .error("翻译请求无效")), over: connection)
                 return
             }
+            let generation = await translationService.currentGeneration()
             let targets = await TranslationPreferences.shared.targets
-            let reply = await TranslationBridgeHandler(service: translationService).handle(payload, targets: targets)
+            let reply = await translationService.handle(payload, targets: targets, generation: generation)
             guard let encoded = try? JSONEncoder().encode(reply), let text = String(data: encoded, encoding: .utf8) else {
                 BridgeServer.send(response: WireResponse(requestID: message.requestID, response: .error("翻译响应无效")), over: connection)
                 return
             }
-            BridgeServer.send(response: WireResponse(requestID: message.requestID, response: .text(text)), over: connection)
+            let response = WireResponse(requestID: message.requestID, response: .text(text))
+            let published = await translationService.publishIfCurrent(generation) {
+                BridgeServer.send(response: response, over: connection)
+            }
+            if !published {
+                let changed = TranslationBridgeReply(capability: nil, event: nil, failure: .serviceChanged)
+                if let bytes = try? JSONEncoder().encode(changed), let messageText = String(data: bytes, encoding: .utf8) {
+                    BridgeServer.send(response: WireResponse(requestID: message.requestID, response: .text(messageText)), over: connection)
+                }
+            }
         case .ping:
             let status = await coordinator.currentStatus
             BridgeServer.send(

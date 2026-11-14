@@ -6,6 +6,29 @@ actor TranslationServiceRegistry: TextTranslating {
     private var service: any TextTranslating = DisabledTranslationService()
     private var generation: UInt64 = 0
 
+    func currentGeneration() -> UInt64 { generation }
+
+    /// Linearize the final send with configuration changes and revocation.
+    /// The closure must only enqueue the response and must not suspend.
+    func publishIfCurrent(_ expected: UInt64, _ publish: @Sendable () -> Void) -> Bool {
+        guard generation == expected else { return false }
+        publish()
+        return true
+    }
+
+    /// Bind each bridge request to the service selected at its captured generation.
+    func handle(_ payload: TranslationBridgePayload, targets: [TranslationTarget], generation expected: UInt64) async -> TranslationBridgeReply {
+        guard generation == expected else {
+            return TranslationBridgeReply(capability: nil, event: nil, failure: .serviceChanged)
+        }
+        let current = service
+        let reply = await TranslationBridgeHandler(service: current).handle(payload, targets: targets)
+        guard generation == expected else {
+            return TranslationBridgeReply(capability: nil, event: nil, failure: .serviceChanged)
+        }
+        return reply
+    }
+
     func configure(_ configuration: TranslationFactoryConfiguration,
                    transport: any TranslationHTTPTransport) async {
         generation &+= 1

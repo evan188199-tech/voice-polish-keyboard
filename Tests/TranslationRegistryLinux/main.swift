@@ -26,6 +26,13 @@ actor FixtureTransport: TranslationHTTPTransport {
     }
 }
 
+final class FixtureSink: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String] = []
+    func record(_ value: String) { lock.withLock { values.append(value) } }
+    func snapshot() -> [String] { lock.withLock { values } }
+}
+
 @main enum RegistryChecks {
     static func main() async throws {
         let fake = FixtureTransport(), registry = TranslationServiceRegistry()
@@ -50,7 +57,6 @@ actor FixtureTransport: TranslationHTTPTransport {
         do { _ = try await registry.translate(request("虚构甲")); check(false, "unapproved request") } catch {}
         check(await fake.count() == 0, "unapproved request never calls transport")
         await registry.configure(config(), transport: fake)
-        let bridge = TranslationBridgeHandler(service: registry)
         let available = await registry.capability
         check(available.isAvailable, "explicit fictional approval enables injected service")
         async let first = registry.translate(request("虚构甲"))
@@ -65,7 +71,8 @@ actor FixtureTransport: TranslationHTTPTransport {
         let cancelTask = Task { try await registry.translate(cancelRequest) }
         for _ in 0..<100 where await fake.count() == beforeCancel { try await Task.sleep(nanoseconds: 5_000_000) }
         check(await fake.count() > beforeCancel, "cancel fixture reached transport")
-        _ = await bridge.handle(.init(operation: .cancel, requestID: cancelRequest.context.id), targets: [.english])
+        let cancellationGeneration = await registry.currentGeneration()
+        _ = await registry.handle(.init(operation: .cancel, requestID: cancelRequest.context.id), targets: [.english], generation: cancellationGeneration)
         do { _ = try await cancelTask.value; check(false, "cancel") }
         catch { check((error as? TranslationFailure) == .cancelled, "job cancellation reaches persistent service") }
         let pending = request("虚构乙"), beforeRevoke = await fake.count()
@@ -88,6 +95,27 @@ actor FixtureTransport: TranslationHTTPTransport {
         catch { check((error as? TranslationFailure) == .cancelled || (error as? TranslationFailure) == .serviceChanged, "configuration change cancels old work") }
         let changed = await registry.capability
         check(!changed.isAvailable, "disabled replacement remains unavailable")
+        await fake.set(.success)
+        await registry.configure(config(), transport: fake)
+        let sink = FixtureSink(), oldGeneration = await registry.currentGeneration()
+        let alreadyReturned = try await registry.translate(request("虚构甲"))
+        await registry.revoke()
+        let oldPublished = await registry.publishIfCurrent(oldGeneration) { sink.record(alreadyReturned.translation!) }
+        check(!oldPublished && sink.snapshot().isEmpty, "returned old-generation result is not published after revoke")
+        await registry.configure(config(), transport: fake)
+        let freshGeneration = await registry.currentGeneration()
+        let fresh = try await registry.translate(request("虚构乙"))
+        let freshPublished = await registry.publishIfCurrent(freshGeneration) { sink.record(fresh.translation!) }
+        check(freshPublished && sink.snapshot() == ["Fictional beta"], "new-generation result can publish")
+        let beforeReplacement = await registry.currentGeneration()
+        let returnedBeforeChange = try await registry.translate(request("虚构甲"))
+        await registry.configure(config(), transport: fake)
+        let changedPublished = await registry.publishIfCurrent(beforeReplacement) { sink.record(returnedBeforeChange.translation!) }
+        check(!changedPublished && sink.snapshot() == ["Fictional beta"], "returned old-generation result is not published after replacement")
+        let beforeStale = await fake.count()
+        let staleReply = await registry.handle(.init(operation: .translateText, request: request("虚构甲")), targets: [.english], generation: beforeReplacement)
+        let afterStale = await fake.count()
+        check(staleReply.failure == .serviceChanged && afterStale == beforeStale, "stale bridge request cannot reach replacement service")
         print("Translation registry checks passed")
     }
 }

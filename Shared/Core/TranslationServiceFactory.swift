@@ -27,30 +27,6 @@ struct TranslationHTTPReply: Sendable {
 protocol TranslationHTTPTransport: Sendable {
     func send(_ request: URLRequest) async throws -> TranslationHTTPReply
 }
-private final class TranslationRedirectBlocker: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
-                    newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
-        completionHandler(nil)
-    }
-}
-/// An ephemeral HTTP transport, constructed only when the caller opts in.
-/// Response-size checks occur after URLSession receives bytes, not a streaming cap.
-final class URLSessionTranslationTransport: TranslationHTTPTransport, @unchecked Sendable {
-    private let session: URLSession
-    init() {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.urlCache = nil; configuration.httpCookieStorage = nil; configuration.httpShouldSetCookies = false
-        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        configuration.timeoutIntervalForRequest = 20; configuration.timeoutIntervalForResource = 30
-        session = URLSession(configuration: configuration, delegate: TranslationRedirectBlocker(), delegateQueue: nil)
-    }
-    func send(_ request: URLRequest) async throws -> TranslationHTTPReply {
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse, response.url == request.url else { throw PolishingError.noResponse }
-        guard data.count <= 1_048_576 else { throw PolishingError.invalidResponse }
-        return TranslationHTTPReply(status: http.statusCode, body: data)
-    }
-}
 /// Translation-only implementation of the project's existing TextPolishing
 /// interface. No compatibility retries that collapse system and user roles.
 struct StrictTranslationPolisher: TextPolishing {
@@ -93,6 +69,7 @@ actor ManagedTranslationService: TextTranslating {
     private let timeoutNanoseconds: UInt64
     private var tasks: [UUID: (UUID, Task<TranslationEvent, Error>)] = [:]
     private var used = Set<UUID>()
+    private var cancelled = Set<UUID>()
     private var revoked = false
     init(service: any TextTranslating, timeoutNanoseconds: UInt64) { self.service = service; self.timeoutNanoseconds = timeoutNanoseconds }
     var capability: TranslationCapability { get async {
@@ -109,10 +86,18 @@ actor ManagedTranslationService: TextTranslating {
         let generation = UUID()
         let operation = Task { try await TranslationRequestExecutor.run(request, service: service, timeoutNanoseconds: timeoutNanoseconds) }
         tasks[id] = (generation, operation)
-        defer { if tasks[id]?.0 == generation { tasks[id] = nil } }
-        return try await withTaskCancellationHandler { try await operation.value } onCancel: { operation.cancel() }
+        defer { if tasks[id]?.0 == generation { tasks[id] = nil; cancelled.remove(id) } }
+        let result = try await withTaskCancellationHandler { try await operation.value } onCancel: { operation.cancel() }
+        try Task.checkCancellation()
+        guard !revoked, !cancelled.contains(id) else { throw TranslationFailure.cancelled }
+        return result
     }
-    func cancel(_ requestID: UUID) async { tasks[requestID]?.1.cancel() }
+    func cancel(_ requestID: UUID) async {
+        // A cancel can race ahead of the request. Mark it used so that a later
+        // arrival with the same ID cannot initiate a network request.
+        if used.count < 2_048 { used.insert(requestID) }
+        if let task = tasks[requestID]?.1 { cancelled.insert(requestID); task.cancel() }
+    }
     /// Cancels pending work locally; requests already received remotely cannot
     /// be recalled. A newly authorized config needs a fresh instance.
     func revoke() { revoked = true; for (_, task) in tasks.values { task.cancel() } }

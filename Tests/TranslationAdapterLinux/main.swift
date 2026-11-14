@@ -30,6 +30,40 @@ actor FictionalHTTP: TranslationHTTPTransport {
         }
     }
 }
+final class LocalTranslationURLProtocol: URLProtocol, @unchecked Sendable {
+    enum Mode { case success, oversizeChunks, oversizedHeader, hang }
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var mode: Mode = .success
+    nonisolated(unsafe) private static var stops = 0
+    static func configure(_ value: Mode) { lock.withLock { mode = value; stops = 0 } }
+    static func stopCount() -> Int { lock.withLock { stops } }
+    override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "fixture.invalid" }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let selected = Self.lock.withLock { Self.mode }
+        let headers = selected == .oversizedHeader ? ["Content-Length": "1048577"] : [:]
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        switch selected {
+        case .success:
+            client?.urlProtocol(self, didLoad: Data("fixture".utf8)); client?.urlProtocolDidFinishLoading(self)
+        case .oversizeChunks:
+            client?.urlProtocol(self, didLoad: Data(repeating: 65, count: 600_000))
+            client?.urlProtocol(self, didLoad: Data(repeating: 66, count: 600_000))
+        case .oversizedHeader:
+            // Darwin URLSession may defer delegate delivery until the protocol
+            // finishes; the header must still be rejected before any body.
+            client?.urlProtocolDidFinishLoading(self)
+        case .hang: break
+        }
+    }
+    override func stopLoading() { Self.lock.withLock { Self.stops += 1 } }
+}
+final class RedirectDecision: @unchecked Sendable {
+    private let lock = NSLock(); private var chosen: URLRequest?; private var called = false
+    func set(_ request: URLRequest?) { lock.withLock { chosen = request; called = true } }
+    func rejected() -> Bool { lock.withLock { called && chosen == nil } }
+}
 @main enum TranslationAdapterChecks {
     static func body(target: String = "en", translation: String = "Contact the fictional person tomorrow.", finish: String = "stop") -> Data {
         let inner = try! JSONSerialization.data(withJSONObject: ["target": target, "translation": translation])
@@ -88,6 +122,11 @@ actor FictionalHTTP: TranslationHTTPTransport {
         func fresh(_ source: String = "明天联系虚构人物", target: TranslationTarget = .english) -> TranslationRequest {
             TranslationRequest(context: TranslationContext(target: target, sourceKind: .typed, consentServiceID: "fixture"), source: source)
         }
+        let cancelledBeforeStart = fresh()
+        await service.cancel(cancelledBeforeStart.context.id)
+        do { _ = try await service.translate(cancelledBeforeStart); check(false, "cancel-before-start") }
+        catch { check((error as? TranslationFailure) == .invalidResult, "cancel-before-start prevents later network request") }
+        let afterEarlyCancel = await fake.snapshot(); check(afterEarlyCancel.0 == 1, "cancel-before-start never reaches transport")
         await fake.set(.reply(200, body(translation: "")))
         do { _ = try await service.translate(fresh()); check(false, "empty response") }
         catch { check((error as? TranslationFailure) == .emptyResult, "empty translation is rejected") }
@@ -163,6 +202,43 @@ actor FictionalHTTP: TranslationHTTPTransport {
         check(!revokedCap.isAvailable && revokedCap.failure == .notEnabled, "revoked instance reports unavailable")
         do { _ = try await revocable.translate(fresh()); check(false, "revoked instance must not send") }
         catch { check((error as? TranslationFailure) == .notEnabled, "revoked instance cannot issue new requests") }
+        // URLProtocol keeps all traffic local while exercising the real
+        // URLSession delegate rather than a simulated TranslationHTTPTransport.
+        let localRequest = URLRequest(url: URL(string: "https://fixture.invalid/v1/chat/completions")!)
+        let localTransport = URLSessionTranslationTransport(testProtocolClasses: [LocalTranslationURLProtocol.self], deadlineNanoseconds: 500_000_000)
+        LocalTranslationURLProtocol.configure(.success)
+        let localReply = try! await localTransport.send(localRequest)
+        check(localReply.status == 200 && localReply.body == Data("fixture".utf8), "URLSession delegate receives small local response")
+        LocalTranslationURLProtocol.configure(.oversizeChunks)
+        do { _ = try await localTransport.send(localRequest); check(false, "oversize streamed body") }
+        catch { check((error as? PolishingError).map { if case .invalidResponse = $0 { true } else { false } } == true, "stream cap rejects cumulative oversize") }
+        for _ in 0..<50 { if LocalTranslationURLProtocol.stopCount() > 0 { break }; try? await Task.sleep(nanoseconds: 2_000_000) }
+        check(LocalTranslationURLProtocol.stopCount() > 0, "oversize cancels the local URLProtocol request")
+        LocalTranslationURLProtocol.configure(.oversizedHeader)
+        do { _ = try await localTransport.send(localRequest); check(false, "oversize content length") }
+        catch { check((error as? PolishingError).map { if case .invalidResponse = $0 { true } else { false } } == true, "oversize content length is refused") }
+        LocalTranslationURLProtocol.configure(.hang)
+        let shortTransport = URLSessionTranslationTransport(testProtocolClasses: [LocalTranslationURLProtocol.self], deadlineNanoseconds: 30_000_000)
+        do { _ = try await shortTransport.send(localRequest); check(false, "transport deadline") }
+        catch { check((error as? PolishingError).map { if case .timeout = $0 { true } else { false } } == true, "transport deadline releases caller") }
+        for _ in 0..<50 { if LocalTranslationURLProtocol.stopCount() > 0 { break }; try? await Task.sleep(nanoseconds: 2_000_000) }
+        check(LocalTranslationURLProtocol.stopCount() > 0, "deadline cancels local URLProtocol request")
+        LocalTranslationURLProtocol.configure(.hang)
+        let cancelledTransport = Task { try await localTransport.send(localRequest) }
+        try? await Task.sleep(nanoseconds: 20_000_000); cancelledTransport.cancel()
+        do { _ = try await cancelledTransport.value; check(false, "transport cancellation") }
+        catch { check(error is CancellationError, "transport cancellation resolves promptly") }
+        for _ in 0..<50 { if LocalTranslationURLProtocol.stopCount() > 0 { break }; try? await Task.sleep(nanoseconds: 2_000_000) }
+        check(LocalTranslationURLProtocol.stopCount() > 0, "cancellation stops local URLProtocol request")
+        let redirect = TranslationBoundedRequest(deadlineNanoseconds: 1_000_000_000)
+        let inertSession = URLSession(configuration: .ephemeral)
+        let inertTask = inertSession.dataTask(with: localRequest) // Never resumed.
+        let redirectResponse = HTTPURLResponse(url: localRequest.url!, statusCode: 302, httpVersion: nil, headerFields: nil)!
+        let destination = URLRequest(url: URL(string: "https://other.invalid/path")!)
+        let decision = RedirectDecision()
+        redirect.urlSession(inertSession, task: inertTask, willPerformHTTPRedirection: redirectResponse, newRequest: destination) { decision.set($0) }
+        check(decision.rejected(), "cross-host redirect callback refuses to forward credentials")
+        inertTask.cancel(); inertSession.invalidateAndCancel()
         if failures > 0 { print("FAILED: \(failures)"); exit(1) }
         print("Translation adapter fixture checks passed; no real HTTP or iOS validation")
     }
