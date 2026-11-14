@@ -9,6 +9,7 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 DEVICE = '00008150-0123456789ABCDEF'
 TEAM = 'ABCDEFGHIJ'
+SHA = 'a' * 40
 
 class InstallSafety(unittest.TestCase):
     def setUp(self):
@@ -18,9 +19,11 @@ class InstallSafety(unittest.TestCase):
         self.log = self.tmp / 'log'
         self.env = os.environ.copy()
         self.env.update(PATH=str(self.tmp) + os.pathsep + self.env['PATH'],
-                        TMPDIR=str(self.tmp), TEST_LOG=str(self.log), DEVELOPMENT_TEAM=TEAM)
+                        TMPDIR=str(self.tmp), TEST_LOG=str(self.log), DEVELOPMENT_TEAM=TEAM, SOURCE_COMMIT=SHA)
         for name, body in {
             'xcodegen': 'echo xcodegen >> "$TEST_LOG"\n',
+            'git': 'if [[ "$1" == rev-parse ]]; then printf "%s\n" "${FAKE_HEAD:-$SOURCE_COMMIT}"; elif [[ "$1" == status ]]; then printf "%s" "${FAKE_DIRTY:-}"; else exit 1; fi\n',
+            'codesign': 'if [[ "$1" == --verify ]]; then [[ "${FAIL_SIGN:-}" != 1 ]]; else printf "Identifier=com.voicepolish.app\nTeamIdentifier=%s\n" "${SIGN_TEAM:-$DEVELOPMENT_TEAM}"; fi\n',
             'xcrun': 'printf "xcrun %s\\n" "$*" >> "$TEST_LOG"\n',
             'xcodebuild': '''printf 'xcodebuild %s\\n' "$*" >> "$TEST_LOG"
 [[ "${FAIL_BUILD:-}" != 1 ]] || exit 1
@@ -60,6 +63,13 @@ EOF
     def test_no_team_no_build(self):
         self.assertNotEqual(self.run_script('install_device.sh', DEVICE, DEVELOPMENT_TEAM='').returncode, 0)
         self.assertEqual(self.calls(), '')
+    def test_source_and_signature_fail_closed(self):
+        for env in ({'SOURCE_COMMIT': ''}, {'FAKE_HEAD': 'b' * 40}, {'FAKE_DIRTY': ' M file'}):
+            self.assertNotEqual(self.run_script('install_device.sh', DEVICE, **env).returncode, 0)
+        self.assertEqual(self.calls(), '')
+        for env in ({'FAIL_SIGN': '1'}, {'SIGN_TEAM': 'ZZZZZZZZZZ'}):
+            self.assertNotEqual(self.run_script('install_device.sh', DEVICE, **env).returncode, 0)
+        self.assertNotIn('install app', self.calls())
     def test_build_failure_and_wrong_bundle_do_not_install(self):
         self.assertNotEqual(self.run_script('install_device.sh', DEVICE, FAIL_BUILD='1').returncode, 0)
         self.assertNotIn('install app', self.calls())

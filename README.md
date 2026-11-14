@@ -46,15 +46,16 @@
 
 - Xcode 16+ (或 Xcode-beta) 及 iOS 18+ SDK
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`)
-- Apple Developer 个人 Team ID（在 `project.yml` 中配置）
+- Apple Developer 个人 Team ID（设备安装脚本必须显式提供）
 
 ### 编译与部署到设备
 
 ```bash
 cd voice-polish-keyboard
 
-# 1. 生成项目并编译安装到连接的 iPhone
-./scripts/install_device.sh
+# 1. 查看设备标识，并在干净 checkout 上显式指定目标、团队和当前完整提交
+./scripts/install_device.sh list
+SOURCE_COMMIT="$(git rev-parse HEAD)" DEVELOPMENT_TEAM=<team-id> ./scripts/install_device.sh <device-id>
 
 # 2. 解锁 iPhone 后，启动主应用
 xcrun devicectl device process launch --device <device-id> com.voicepolish.app
@@ -63,7 +64,7 @@ xcrun devicectl device process launch --device <device-id> com.voicepolish.app
 可选：从 Mac 本地预置模型文件到手机：
 
 ```bash
-./scripts/seed_model_to_device.sh
+./scripts/seed_model_to_device.sh <device-id>
 ```
 
 ### 首次使用检查清单
