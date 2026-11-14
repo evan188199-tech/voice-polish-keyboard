@@ -200,7 +200,9 @@ struct KeyboardView: View {
             .accessibilityLabel("处理模式：\(model.polishEnabled ? model.polishMode.displayName : "原文")")
 
             Menu {
-                if let text = model.lastDeliveredText, !text.isEmpty {
+                if model.heldResult != nil {
+                    Button("将保留结果插入当前输入框") { model.insertHeldResult() }
+                } else if let text = model.lastDeliveredText, !text.isEmpty {
                     Button("插入最近结果（可能重复）") { onInsert(text) }
                     Button("复制最近结果") { model.copyLastDeliveredText() }
                 }

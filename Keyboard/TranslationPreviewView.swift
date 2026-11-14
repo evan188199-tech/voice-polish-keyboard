@@ -46,7 +46,13 @@ struct TranslationPreviewView: View {
                     if let event = model.lastEvent {
                         Divider()
                         Text("最近原文：\(event.source)").font(.caption)
-                        if let text = event.translation { Text("最近译文：\(text)").font(.caption) }
+                        if let text = event.translation {
+                            Text("最近译文：\(text)").font(.caption)
+                            if model.lastTranslationCanInsert {
+                                Button("将最近译文插入当前输入框") { model.insertLastTranslation() }.font(.caption).frame(minHeight: 44)
+                                Button("放弃本次插入，继续后续结果") { model.abandonLastTranslationInsertion() }.font(.caption).frame(minHeight: 44)
+                            }
+                        }
                         if let failure = event.failure { Text(failure.message).font(.caption).foregroundStyle(.orange) }
                         Button("恢复最近原文到编辑区") { model.restoreLastOriginal() }.font(.caption).frame(minHeight: 44)
                     }

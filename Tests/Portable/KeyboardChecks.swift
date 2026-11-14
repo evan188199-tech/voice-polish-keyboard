@@ -93,9 +93,15 @@ actor PortableTranslationProvider: TextTranslating {
     @MainActor static func pause(_ milliseconds: UInt64 = 320) async {
         try? await Task.sleep(nanoseconds: milliseconds * 1_000_000)
     }
-    @MainActor static func makeModel(_ bridge: MockKeyboardBridge) async -> KeyboardViewModel {
-        let defaults = UserDefaults(suiteName: "keyboard-check-\(UUID())")!
+    @MainActor static func makeModel(_ bridge: MockKeyboardBridge, defaults: UserDefaults? = nil) async -> KeyboardViewModel {
+        let defaults = defaults ?? UserDefaults(suiteName: "keyboard-check-\(UUID())")!
         let model = KeyboardViewModel(client: bridge, defaults: defaults)
+        model.canExplicitlyInsert = { true }
+        model.onCaptureDestination = { _ in }
+        model.onDeliverDestination = { [weak model] _, text in
+            guard let insert = model?.onTextReady else { return false }
+            insert(text); return true
+        }
         model.appear()
         await model.connect()
         return model
@@ -213,6 +219,7 @@ actor PortableTranslationProvider: TextTranslating {
         var mixedInsertions: [String] = []
         mixed.onTextReady = { mixedInsertions.append($0) }
         translation.onInsert = { mixedInsertions.append($0) }
+        translation.onAutomaticInsert = { [weak translation] _, text in guard let insert = translation?.onInsert else { return false }; insert(text); return true }
         await translation.appear(hasFullAccess: true, hostSessionID: UUID())
         mixed.startTranslation(.english, translation: translation)
         await pause(100)
@@ -237,6 +244,7 @@ actor PortableTranslationProvider: TextTranslating {
         var failureInsertions: [String] = []
         failedModel.onTextReady = { failureInsertions.append($0) }
         failedTranslation.onInsert = { failureInsertions.append($0) }
+        failedTranslation.onAutomaticInsert = { [weak failedTranslation] _, text in guard let insert = failedTranslation?.onInsert else { return false }; insert(text); return true }
         await failedTranslation.appear(hasFullAccess: true, hostSessionID: UUID())
         failedModel.startTranslation(.english, translation: failedTranslation)
         await pause(100); await failedModel.toggleRecording()
@@ -255,6 +263,7 @@ actor PortableTranslationProvider: TextTranslating {
             defaults: UserDefaults(suiteName: "integration-cancel-\(UUID())")!)
         var cancelledInsertions: [String] = []
         cancelledTranslation.onInsert = { cancelledInsertions.append($0) }
+        cancelledTranslation.onAutomaticInsert = { [weak cancelledTranslation] _, text in guard let insert = cancelledTranslation?.onInsert else { return false }; insert(text); return true }
         await cancelledTranslation.appear(hasFullAccess: true, hostSessionID: UUID())
         cancelledModel.startTranslation(.english, translation: cancelledTranslation)
         await pause(100); await cancelledModel.cancelRecording()
@@ -268,6 +277,7 @@ actor PortableTranslationProvider: TextTranslating {
             defaults: UserDefaults(suiteName: "integration-stale-\(UUID())")!)
         var staleInsertions: [String] = []
         staleTranslation.onInsert = { staleInsertions.append($0) }
+        staleTranslation.onAutomaticInsert = { [weak staleTranslation] _, text in guard let insert = staleTranslation?.onInsert else { return false }; insert(text); return true }
         await staleTranslation.appear(hasFullAccess: true, hostSessionID: UUID())
         staleModel.startTranslation(.english, translation: staleTranslation)
         await pause(100); await staleModel.toggleRecording()
@@ -277,6 +287,69 @@ actor PortableTranslationProvider: TextTranslating {
         await pause(500)
         check(staleInsertions.isEmpty, "late translation after keyboard disappearance cannot insert")
         check(staleTranslation.lastEvent?.source == "旧会话原文", "disappearing keyboard retains submitted translation source")
+
+        let focusBridge = MockKeyboardBridge()
+        let focusDefaults = UserDefaults(suiteName: "focus-keyboard-\(UUID())")!
+        let focusModel = await makeModel(focusBridge, defaults: focusDefaults)
+        var focusGuard = TranslationDeliveryGuard()
+        let initialField = UUID(), otherField = UUID()
+        var currentField: UUID? = initialField
+        var focusResults: [String] = []
+        focusModel.onTextReady = { focusResults.append($0) }
+        focusModel.onCaptureDestination = { id in
+            focusGuard.capture(id, document: currentField, visible: true, connected: true, continuityVerified: true)
+        }
+        focusModel.onDeliverDestination = { id, text in
+            guard focusGuard.consume(id, document: currentField, visible: true, connected: true) else { return false }
+            focusResults.append(text); return true
+        }
+        await focusModel.toggleRecording(); await focusModel.toggleRecording()
+        await focusModel.toggleRecording(); await focusModel.toggleRecording()
+        currentField = otherField; focusGuard.invalidate()
+        await focusBridge.complete(0, text: "旧字段语音")
+        await focusBridge.complete(1, text: "后一段语音")
+        await pause(400)
+        let heldJobs = await focusBridge.jobCount()
+        check(focusResults.isEmpty && focusModel.heldResult == "旧字段语音" && heldJobs == 1,
+              "ordinary dictation holds old-field result and does not consume the next segment")
+        let reconstructedKeyboard = KeyboardViewModel(client: focusBridge, defaults: focusDefaults)
+        check(reconstructedKeyboard.heldResult == "旧字段语音", "held dictation survives keyboard reconstruction")
+        focusModel.canExplicitlyInsert = { false }
+        focusModel.insertHeldResult()
+        check(focusModel.heldResult == "旧字段语音" && focusResults.isEmpty, "unavailable foreground keeps held dictation intact")
+        focusModel.canExplicitlyInsert = { true }
+        focusModel.insertHeldResult()
+        await pause(400)
+        check(focusResults == ["旧字段语音"] && focusModel.heldResult == "后一段语音",
+              "explicit recovery releases the next held segment in order")
+        focusModel.insertHeldResult()
+        check(focusResults == ["旧字段语音", "后一段语音"], "explicit recovery preserves segment order")
+        focusModel.disconnect()
+
+        let blockedBridge = MockKeyboardBridge()
+        let blockedModel = await makeModel(blockedBridge)
+        let blockedTranslation = TranslationViewModel(service: PortableTranslationProvider(),
+            defaults: UserDefaults(suiteName: "integration-blocked-\(UUID())")!)
+        var blockedResults: [String] = []
+        blockedModel.onTextReady = { blockedResults.append($0) }
+        blockedTranslation.onInsert = { blockedResults.append($0) }
+        blockedTranslation.canExplicitlyInsert = { true }
+        blockedTranslation.onAutomaticInsert = { _, _ in false }
+        await blockedTranslation.appear(hasFullAccess: true, hostSessionID: UUID())
+        blockedModel.startTranslation(.english, translation: blockedTranslation)
+        await pause(100); await blockedModel.toggleRecording()
+        await blockedModel.toggleRecording(); await blockedModel.toggleRecording()
+        await blockedBridge.complete(0, text: "第一段原文")
+        await blockedBridge.complete(1, text: "下一段普通听写")
+        await pause(1000)
+        let pendingBehindTranslation = await blockedBridge.jobCount()
+        check(blockedResults.isEmpty && blockedModel.translationRecoveryPending && pendingBehindTranslation == 1,
+              "blocked translation pauses later dictation until an explicit decision")
+        blockedTranslation.insertLastTranslation()
+        await pause(400)
+        check(blockedResults == ["Translated.", "下一段普通听写"],
+              "translation recovery releases following dictation in order")
+        blockedTranslation.disappear(); blockedModel.disconnect()
 
         var cursor = OrderedDeliveryCursor()
         check(!cursor.canDeliver(sequence: 2) && cursor.canDeliver(sequence: 1), "production ordered cursor blocks second result")

@@ -1,5 +1,6 @@
 import UIKit
 import SwiftUI
+import Combine
 
 final class KeyboardViewController: UIInputViewController {
     private var host: UIHostingController<KeyboardView>?
@@ -7,6 +8,8 @@ final class KeyboardViewController: UIInputViewController {
     private let translationModel = TranslationViewModel(service: BridgeTranslationService())
     private var translationAppearanceTask: Task<Void, Never>?
     private var translationVisible = false
+    private var translationDeliveryGuard = TranslationDeliveryGuard()
+    private var connectionObservation: AnyCancellable?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -22,6 +25,37 @@ final class KeyboardViewController: UIInputViewController {
         }
         viewModel.appear()
         translationVisible = true
+        viewModel.attachTranslation(translationModel)
+        translationDeliveryGuard.invalidate()
+        connectionObservation = viewModel.$isConnected.removeDuplicates().sink { [weak self] _ in
+            self?.translationDeliveryGuard.invalidate()
+        }
+        viewModel.onCaptureDestination = { [weak self] id in
+            guard let self else { return }
+            self.translationDeliveryGuard.capture(id, document: self.textDocumentProxy.documentIdentifier,
+                visible: self.translationVisible && self.view.window != nil, connected: self.viewModel.isConnected)
+        }
+        viewModel.onAbandonDestination = { [weak self] id in self?.translationDeliveryGuard.abandon(id) }
+        viewModel.onDeliverDestination = { [weak self] id, text in
+            guard let self, self.translationDeliveryGuard.consume(id, document: self.textDocumentProxy.documentIdentifier,
+                visible: self.translationVisible && self.view.window != nil, connected: self.viewModel.isConnected) else { return false }
+            self.textDocumentProxy.insertText(text)
+            return true
+        }
+        translationModel.onCaptureTarget = { [weak self] id in
+            guard let self else { return }
+            self.translationDeliveryGuard.capture(id, document: self.textDocumentProxy.documentIdentifier,
+                visible: self.translationVisible && self.view.window != nil, connected: self.viewModel.isConnected)
+        }
+        translationModel.onAbandonTarget = { [weak self] id in self?.translationDeliveryGuard.abandon(id) }
+        translationModel.onAutomaticInsert = { [weak self] id, text in
+            guard let self, self.translationDeliveryGuard.consume(id, document: self.textDocumentProxy.documentIdentifier,
+                visible: self.translationVisible && self.view.window != nil, connected: self.viewModel.isConnected) else { return false }
+            self.textDocumentProxy.insertText(text)
+            return true
+        }
+        viewModel.canExplicitlyInsert = { [weak self] in self?.translationVisible == true && self?.view.window != nil }
+        translationModel.canExplicitlyInsert = { [weak self] in self?.translationVisible == true && self?.view.window != nil }
         translationModel.onInsert = { [weak self] text in
             guard let self, self.view.window != nil else { return }
             self.textDocumentProxy.insertText(text)
@@ -41,11 +75,32 @@ final class KeyboardViewController: UIInputViewController {
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         translationVisible = false
+        translationDeliveryGuard.invalidate()
+        connectionObservation?.cancel()
+        connectionObservation = nil
+        translationModel.onCaptureTarget = nil
+        translationModel.onAutomaticInsert = nil
+        translationModel.onAbandonTarget = nil
         translationAppearanceTask?.cancel()
         translationAppearanceTask = nil
         translationModel.disappear()
         viewModel.onTextReady = nil
+        viewModel.canExplicitlyInsert = nil
+        translationModel.canExplicitlyInsert = nil
         viewModel.disconnect()
+        viewModel.onCaptureDestination = nil
+        viewModel.onDeliverDestination = nil
+        viewModel.onAbandonDestination = nil
+    }
+
+    override func textWillChange(_ textInput: (any UITextInput)?) {
+        translationDeliveryGuard.invalidate()
+        super.textWillChange(textInput)
+    }
+
+    override func selectionWillChange(_ textInput: (any UITextInput)?) {
+        translationDeliveryGuard.invalidate()
+        super.selectionWillChange(textInput)
     }
 
     private func setupKeyboard() {

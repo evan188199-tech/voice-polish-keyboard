@@ -17,7 +17,14 @@ import Combine
     }
     @Published private(set) var message = "翻译尚未连接"
     var onInsert: ((String) -> Void)?
+    var canExplicitlyInsert: (() -> Bool)?
     var onVoiceFinished: ((UUID) -> Void)?
+    var onRecoveryResolved: (() -> Void)?
+    var onRecoveryRequired: (() -> Void)?
+    var onCaptureTarget: ((UUID) -> Void)?
+    var onAutomaticInsert: ((UUID, String) -> Bool)?
+    var onAbandonTarget: ((UUID) -> Void)?
+    @Published private(set) var lastTranslationCanInsert = false
     private let service: any TextTranslating
     private let defaults: UserDefaults
     private let timeoutNanoseconds: UInt64
@@ -40,7 +47,10 @@ import Combine
         if let data = defaults.data(forKey: "translation_target_v1"), let target = try? JSONDecoder().decode(TranslationTarget.self, from: data), target.isValid {
             draft.changeTarget(target)
         }
-        if let data = defaults.data(forKey: "translation_recovery_v1") { lastEvent = try? JSONDecoder().decode(TranslationEvent.self, from: data) }
+        if let data = defaults.data(forKey: "translation_recovery_v1") {
+            lastEvent = try? JSONDecoder().decode(TranslationEvent.self, from: data)
+            lastTranslationCanInsert = defaults.bool(forKey: "translation_recovery_insertable_v1") && lastEvent?.isSuccess == true
+        }
     }
     func appear(hasFullAccess: Bool, hostSessionID: UUID? = nil) async {
         if let hostSessionID, hostSessionID != self.hostSessionID {
@@ -83,6 +93,9 @@ import Combine
     func restoreLastOriginal() { if let lastEvent { editSource(lastEvent.source); showPreview = true } }
     @discardableResult func submitTyped() -> UUID? {
         guard isVisible, !draft.isBusy else { return nil }
+        guard !lastTranslationCanInsert else {
+            message = "请先处理已保留的译文"; showPreview = true; return nil
+        }
         if let failure = availabilityFailure(for: draft.target) {
             draft.fail(failure, id: draft.requestID); message = failure.message; return nil
         }
@@ -92,14 +105,19 @@ import Combine
             message = draft.translation != nil ? "原文和目标未改变，译文已保留；修改后可重新翻译。" : (draft.failure?.message ?? "请检查原文")
             return nil
         }
+        if context.deliveryMode == .automatic { onCaptureTarget?(context.id) }
         enqueue(request)
         return context.id
     }
     /// Call only after a language is deliberately selected, never on press-down alone.
     func prepareVoice(target: TranslationTarget) -> TranslationContext? {
         guard isVisible else { return nil }
+        guard !lastTranslationCanInsert else {
+            message = "请先处理已保留的译文"; showPreview = true; return nil
+        }
         if let failure = availabilityFailure(for: target) { message = failure.message; return nil }
         let context = TranslationContext(target: target, sourceKind: .voice, consentServiceID: capability.serviceID)
+        onCaptureTarget?(context.id)
         voiceContexts[context.id] = context
         return context
     }
@@ -119,6 +137,7 @@ import Combine
         if let request = currentRequest?.context.id == id ? currentRequest : queue.first(where: { $0.context.id == id }) {
             retain(TranslationEvent(context: request.context, source: request.source, translation: nil, failure: .cancelled))
         }
+        onAbandonTarget?(id)
         cancelled.insert(id); voiceContexts[id] = nil
         queue.removeAll { $0.context.id == id }
         if currentID == id { current?.cancel() }
@@ -132,6 +151,22 @@ import Combine
     func insertPreview() {
         guard isVisible, let text = draft.consumePreview() else { return }
         onInsert?(text); message = "已尝试插入草稿，不会自动发送"
+    }
+    func insertLastTranslation() {
+        guard isVisible, canExplicitlyInsert?() == true, lastTranslationCanInsert,
+              let event = lastEvent, let text = event.translation, let insert = onInsert else { return }
+        lastTranslationCanInsert = false
+        defaults.set(false, forKey: "translation_recovery_insertable_v1")
+        insert(text)
+        message = "已按你的选择插入当前输入框；原字段无法确认"
+        onRecoveryResolved?()
+    }
+    func abandonLastTranslationInsertion() {
+        guard lastTranslationCanInsert else { return }
+        lastTranslationCanInsert = false
+        defaults.set(false, forKey: "translation_recovery_insertable_v1")
+        message = "译文仍可查看，已放弃本次插入"
+        onRecoveryResolved?()
     }
     func insertOriginal() {
         guard isVisible, !draft.source.isEmpty, !originalInserted else { return }
@@ -182,15 +217,25 @@ import Combine
                 self.delivered.insert(id)
                 self.retain(event)
                 if event.isSuccess, request.context.deliveryMode == .automatic, let text = event.translation {
-                    self.onInsert?(text)
-                    self.message = "已尝试插入译文草稿，不会自动发送"
-                }
+                    if self.onAutomaticInsert?(id, text) == true {
+                        self.lastTranslationCanInsert = false
+                        self.defaults.set(false, forKey: "translation_recovery_insertable_v1")
+                        self.message = "已尝试插入译文草稿，不会自动发送"
+                    } else {
+                        self.lastTranslationCanInsert = true
+                        self.defaults.set(true, forKey: "translation_recovery_insertable_v1")
+                        self.onRecoveryRequired?()
+                        self.message = "输入位置已变化或无法确认 · 译文已保留，可主动恢复"
+                    }
+                } else { self.onAbandonTarget?(id) }
                 if request.context.sourceKind == .voice { self.onVoiceFinished?(id) }
             }
         }
     }
     private func retain(_ event: TranslationEvent) {
         lastEvent = event
+        lastTranslationCanInsert = false
+        defaults.set(false, forKey: "translation_recovery_insertable_v1")
         message = event.failure?.message ?? "译文可恢复，请核对姓名、地名、否定与语气"
         if let data = try? JSONEncoder().encode(event) { defaults.set(data, forKey: "translation_recovery_v1") }
         persistDraft()

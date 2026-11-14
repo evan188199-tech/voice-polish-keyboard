@@ -57,6 +57,11 @@ final class TranslationURLProtocol: URLProtocol, @unchecked Sendable {
                       defaults: UserDefaults? = nil) async -> TranslationViewModel {
     let m = TranslationViewModel(service: service, defaults: defaults ?? UserDefaults(suiteName: "translation-\(UUID())")!, timeoutNanoseconds: timeout)
     await m.appear(hasFullAccess: true)
+    m.canExplicitlyInsert = { true }
+    m.onAutomaticInsert = { [weak m] _, text in
+        guard let insert = m?.onInsert else { return false }
+        insert(text); return true
+    }
     return m
 }
 func context(_ target: TranslationTarget = .english, kind: TranslationSourceKind = .typed,
@@ -310,3 +315,79 @@ let bridgeMock = TranslationBridgeHandler(service: ImmediateBridgeTranslator())
 let mockReply = await bridgeMock.handle(TranslationBridgePayload(operation: .translateText, request: deniedRequest), targets: [.english])
 check(mockReply.event?.translation == "Hello." && mockReply.event?.source == deniedRequest.source,
       "bridge mock preserves request identity and returns translated text")
+
+// A single visible keyboard can move to another host field before the reply.
+let focusService = ControlledTranslator()
+let focusDefaults = UserDefaults(suiteName: "focus-recovery-\(UUID())")!
+let focusModel = await model(focusService, defaults: focusDefaults)
+var focusInsertions: [String] = []
+focusModel.onInsert = { focusInsertions.append($0) }
+var focusGuard = TranslationDeliveryGuard()
+let fieldA = UUID(), fieldB = UUID()
+var currentDocument: UUID? = fieldA
+focusModel.onCaptureTarget = { id in focusGuard.capture(id, document: currentDocument, visible: true, connected: true, continuityVerified: true) }
+focusModel.onAutomaticInsert = { id, text in
+    guard focusGuard.consume(id, document: currentDocument, visible: true, connected: true) else { return false }
+    focusInsertions.append(text); return true
+}
+focusModel.editSource("原文")
+let focusRequest = focusModel.submitTyped()!
+await waitForTranslationTest()
+// Fixture models an external field change without a keyboard disappearance.
+currentDocument = fieldB
+focusGuard.invalidate()
+await focusService.finish(focusRequest, text: "Hello.")
+await waitForTranslationTest()
+check(focusInsertions.isEmpty, "same-appearance field switch must not auto-insert into new field")
+check(focusModel.lastTranslationCanInsert && focusModel.lastEvent?.translation == "Hello.", "blocked translation is retained for explicit recovery")
+focusModel.editSource("新原文")
+check(focusModel.submitTyped() == nil && focusModel.prepareVoice(target: .english) == nil,
+      "new translation cannot overwrite a retained result before a user decision")
+let reopenedFocus = TranslationViewModel(service: focusService, defaults: focusDefaults)
+check(reopenedFocus.lastTranslationCanInsert && reopenedFocus.lastEvent?.translation == "Hello.", "blocked translation recovery survives model reconstruction")
+focusModel.canExplicitlyInsert = { false }
+focusModel.insertLastTranslation()
+check(focusModel.lastTranslationCanInsert && focusInsertions.isEmpty, "unavailable foreground retains translation for later recovery")
+focusModel.canExplicitlyInsert = { true }
+focusModel.insertLastTranslation(); focusModel.insertLastTranslation()
+check(focusInsertions == ["Hello."], "explicit recovery inserts at most once into the current field")
+let afterRecovery = TranslationViewModel(service: focusService, defaults: focusDefaults)
+check(!afterRecovery.lastTranslationCanInsert, "explicit recovery does not become insertable again after reconstruction")
+
+// Binding never compares, reads, or trusts host text.
+var guardFixture = TranslationDeliveryGuard()
+let request1 = UUID(), request2 = UUID(), request3 = UUID(), request4 = UUID(), request5 = UUID()
+guardFixture.capture(request1, document: fieldA, visible: true, connected: true, continuityVerified: true)
+check(guardFixture.consume(request1, document: fieldA, visible: true, connected: true), "unchanged session permits direct insertion")
+check(!guardFixture.consume(request1, document: fieldA, visible: true, connected: true), "duplicate acknowledgement cannot insert twice")
+guardFixture.capture(request2, document: nil, visible: true, connected: true, continuityVerified: true)
+check(!guardFixture.consume(request2, document: nil, visible: true, connected: true), "unavailable document id fails closed")
+guardFixture.capture(request3, document: fieldA, visible: true, connected: true, continuityVerified: true)
+check(!guardFixture.consume(request3, document: fieldB, visible: true, connected: true), "different document ids fail closed even if field text is identical")
+guardFixture.capture(request4, document: fieldA, visible: true, connected: true, continuityVerified: true)
+guardFixture.invalidate()
+check(!guardFixture.consume(request4, document: fieldA, visible: true, connected: true), "selection/text change invalidates matching document identity")
+guardFixture.capture(request5, document: fieldA, visible: true, connected: true, continuityVerified: true)
+check(!guardFixture.consume(request5, document: fieldA, visible: true, connected: false), "bridge disconnect blocks auto-delivery")
+let request6 = UUID(), request7 = UUID(), request8 = UUID()
+guardFixture.capture(request6, document: fieldA, visible: true, connected: true, continuityVerified: true)
+guardFixture.invalidate() // disconnect then reconnect to the same document
+check(!guardFixture.consume(request6, document: fieldA, visible: true, connected: true), "reconnect cannot revive a prior binding")
+guardFixture.capture(request7, document: fieldA, visible: true, connected: true, continuityVerified: true)
+guardFixture.capture(request8, document: fieldA, visible: true, connected: true, continuityVerified: true)
+check(guardFixture.consume(request8, document: fieldA, visible: true, connected: true), "independent binding survives another request")
+check(guardFixture.consume(request7, document: fieldA, visible: true, connected: true), "out-of-order binding acknowledgements remain independent")
+let unboundService = ControlledTranslator()
+let unboundModel = await model(unboundService)
+unboundModel.onAutomaticInsert = nil
+var unboundInserted = 0
+unboundModel.onInsert = { _ in unboundInserted += 1 }
+unboundModel.editSource("原文")
+let unboundID = unboundModel.submitTyped()!
+await waitForTranslationTest(); await unboundService.finish(unboundID, text: "Hello."); await waitForTranslationTest()
+check(unboundInserted == 0 && unboundModel.lastTranslationCanInsert, "missing production delivery guard fails closed while retaining translation")
+
+let unverified = UUID()
+guardFixture.capture(unverified, document: fieldA, visible: true, connected: true)
+check(!guardFixture.consume(unverified, document: fieldA, visible: true, connected: true),
+      "matching document and no observed change do not prove continuity")
