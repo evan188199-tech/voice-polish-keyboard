@@ -52,6 +52,7 @@ final class KeyboardViewModel: ObservableObject {
     }
 
     func appear() {
+        guard !visible else { return }
         visible = true
         appearance &+= 1
         submittedHere.removeAll()
@@ -144,6 +145,7 @@ final class KeyboardViewModel: ObservableObject {
                 statusText = response.response.message ?? "启动失败，请重试"
                 canRetry = true
             }
+            drainBufferedResults()
         } catch {
             // A start may have reached the host. Stop it before offering another attempt.
             guard visible, appearance == epoch else { return }
@@ -176,6 +178,7 @@ final class KeyboardViewModel: ObservableObject {
                 statusText = response.response.message ?? "提交失败，可到主应用历史恢复"
                 canRetry = true
             }
+            drainBufferedResults()
         } catch {
             // Never retry finish: it may already be enqueued. Discovery polling recovers it.
             guard visible, appearance == epoch else { return }
@@ -198,6 +201,7 @@ final class KeyboardViewModel: ObservableObject {
             capture.settle(recording: false)
             if let status = response.response.status { applyHostStatus(status) }
             statusText = "本段已取消 · 已提交队列保留"
+            drainBufferedResults()
         } catch {
             guard visible, appearance == epoch else { return }
             capture.settle(recording: false)
@@ -555,7 +559,12 @@ final class KeyboardViewModel: ObservableObject {
                     }
                 } catch {
                     guard self.visible, self.appearance == epoch else { return }
+                    if !self.capture.canSwitchPage {
+                        _ = try? await self.client.send(.cancel)
+                    }
+                    guard self.visible, self.appearance == epoch else { return }
                     self.connectionFailed()
+                    self.statusText = "连接中断 · 请打开主应用检查录音状态"
                     return
                 }
                 try? await Task.sleep(nanoseconds: 250_000_000)

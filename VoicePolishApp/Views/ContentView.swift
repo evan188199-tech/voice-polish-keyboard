@@ -79,7 +79,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 12) {
             Label("欢迎使用粤英语音键盘", systemImage: "waveform")
                 .font(.title2.bold())
-            Text("借鉴「说点啥」：按住说话、松开发送、左滑取消。本机 SenseVoice 识别，可选 API 润色。")
+            Text("点击开始说话，再次点击完成；左右滑动切换文字键盘。本机 SenseVoice 识别，可选 API 润色。")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
