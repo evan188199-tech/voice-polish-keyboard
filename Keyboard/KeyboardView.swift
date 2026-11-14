@@ -4,6 +4,7 @@ import UIKit
 struct KeyboardView: View {
     @ObservedObject var model: KeyboardViewModel
     @ObservedObject var translation: TranslationViewModel
+    @ObservedObject var privateReferences: PrivateReferenceSearchModel
     let onInsert: (String) -> Void
     let onDelete: () -> Void
     let onReturn: () -> Void
@@ -62,6 +63,7 @@ struct KeyboardView: View {
         .background(Color(uiColor: .systemGroupedBackground))
         .simultaneousGesture(pageSwipe, including: model.canSwitchPage && !translationTracking ? .all : .none)
         .onChange(of: model.appearance) { _, _ in page = .voice }
+        .onChange(of: model.isConnected) { _, connected in if !connected { privateReferences.close() } }
         .onChange(of: model.isRecording) { _, isRecording in
             // Keep the user on the voice page while a hold-to-record gesture is active.
             if isRecording {
@@ -82,7 +84,11 @@ struct KeyboardView: View {
         VStack(spacing: 0) {
             voiceToolbar
             Spacer(minLength: 4)
-            if translation.showPreview && model.canSwitchPage {
+            if let review = model.correctionReview, let reviewID = model.correctionReviewID, model.canSwitchPage {
+                correctionReviewContent(review, reviewID: reviewID)
+            } else if privateReferences.isOpen && model.canSwitchPage {
+                privateReferenceContent
+            } else if translation.showPreview && model.canSwitchPage {
                 TranslationPreviewView(model: translation, onEditSource: { translation.isEditingSource = true; page = .abc },
                     onPasteSource: { if let value = UIPasteboard.general.string { translation.appendSource(value) } },
                     onClose: { translation.showPreview = false; translation.isEditingSource = false })
@@ -133,6 +139,62 @@ struct KeyboardView: View {
             .accessibilityIdentifier("voice.queueStatus")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var privateReferenceContent: some View {
+        VStack(spacing: 4) {
+            HStack {
+                Text("私人词汇与路线").font(.caption.weight(.semibold))
+                Spacer()
+                Button("关闭") { privateReferences.close() }.frame(minHeight: 44)
+            }
+            Text(privateReferences.message).font(.caption2).foregroundStyle(.secondary)
+            HStack {
+                Text(privateReferences.query.isEmpty ? "尚无搜索内容" : privateReferences.query)
+                    .font(.caption).lineLimit(1)
+                Button("输入搜索") { privateReferences.isEditing = true; page = .abc }.frame(minHeight: 44)
+            }
+            ScrollView {
+                ForEach(privateReferences.results) { item in
+                    Button(item.title) {
+                        if let text = privateReferences.choose(item.id) { onInsert(text) }
+                    }.frame(minHeight: 44)
+                }
+            }
+        }
+    }
+
+    private func correctionReviewContent(_ review: CorrectionReviewState, reviewID: UUID) -> some View {
+        VStack(spacing: 3) {
+            ScrollView {
+                Text("\(model.correctionMetadataUnknown ? "收到的文字（标记缺失）" : "原始转写")：\(review.restoreOriginal())").font(.caption).frame(maxWidth: .infinity, alignment: .leading)
+                if model.correctionMetadataUnknown { Text("主应用未提供完整逐任务信息；请核对，不能自动插入。") .font(.caption2) }
+                if review.phase == .reviewing, let proposal = review.proposal {
+                    Text(model.correctionMetadataUnknown ? "候选来自收到的文字，不代表语音识别正确。" : proposal.hint).font(.caption2)
+                    if let draft = proposal.draft { Text("待核对：\(draft)").font(.caption) }
+                    HStack {
+                        ForEach(proposal.candidates, id: \.self) { candidate in
+                            Button(candidate) { model.chooseCorrection(candidate, reviewID: reviewID) }.frame(minHeight: 40)
+                        }
+                    }
+                    Text("手动稿：\(model.correctionManualText)").font(.caption)
+                } else if let final = review.finalText { Text("待插入：\(final)").font(.caption) }
+            }
+            if review.phase == .reviewing {
+                HStack {
+                    Button("编辑") { if model.correctionReviewID == reviewID { model.startCorrectionEdit(reviewID: reviewID); page = .abc } }
+                    Button("采用手动稿") { model.chooseCorrectionManual(model.correctionManualText, reviewID: reviewID) }
+                    Button("保留收到的文字") { model.chooseCorrectionOriginal(reviewID: reviewID) }
+                    Button("取消") { model.cancelCorrection(reviewID: reviewID) }
+                }.font(.caption).frame(minHeight: 44)
+            } else if review.phase == .confirmed {
+                HStack {
+                    Button("返回修改") { model.undoCorrection(reviewID: reviewID) }
+                    Button("插入当前输入框") { model.useCorrection(reviewID: reviewID) }
+                    Button("取消") { model.cancelCorrection(reviewID: reviewID) }
+                }.font(.caption).frame(minHeight: 44)
+            }
+        }
     }
 
     private func placeReviewContent(_ review: PlaceReviewDraft) -> some View {
@@ -215,7 +277,8 @@ struct KeyboardView: View {
                     }.disabled(model.askFollowUpArmed)
                     Button("新问答") { Task { await model.clearAskConversation() } }
                 }
-                Button("翻译与原文恢复") { translation.showPreview = true }
+                Button("私人词汇与路线（未连接）") { translation.showPreview = false; translation.isEditingSource = false; privateReferences.open() }
+                Button("翻译与原文恢复") { privateReferences.close(); translation.showPreview = true }
                 Button("打开主应用") { onActivateSession() }
             } label: {
                 Image(systemName: "ellipsis")
@@ -273,6 +336,7 @@ struct KeyboardView: View {
 
     private var abcContent: some View {
         VStack(spacing: 5) {
+            if model.correctionEditing { correctionEditingHeader }
             HStack(spacing: 6) {
                 ForEach(Self.qwertyRowTop, id: \.self) { letter in
                     letterKey(letter)
@@ -359,8 +423,20 @@ struct KeyboardView: View {
 
     // MARK: - Number page
 
+    private var correctionEditingHeader: some View {
+        HStack {
+            Text(model.correctionManualText.isEmpty ? "输入完整结果" : model.correctionManualText)
+                .font(.caption).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+            if let reviewID = model.correctionReviewID {
+                Button("完成") { if model.correctionReviewID == reviewID { model.finishCorrectionEdit(reviewID: reviewID); page = .voice } }
+                    .font(.caption.weight(.semibold)).frame(minHeight: 36)
+            }
+        }.accessibilityLabel("编辑纠字草稿，不会直接输入宿主")
+    }
+
     private var numberPadContent: some View {
         VStack(spacing: 4) {
+            if model.correctionEditing { correctionEditingHeader }
             symbolRow
             numberGrid
         }
@@ -447,7 +523,9 @@ struct KeyboardView: View {
                 }
             }
             characterKey("回车", accessibilityLabel: "回车，遵循当前应用行为", style: .returnKey) {
-                if translation.isEditingSource { requestInsertion("\n") } else { requestAction(onReturn) }
+                if model.correctionEditing, let reviewID = model.correctionReviewID { model.finishCorrectionEdit(reviewID: reviewID); page = .voice }
+                else if privateReferences.isEditing { privateReferences.isEditing = false; page = .voice }
+                else if translation.isEditingSource { requestInsertion("\n") } else { requestAction(onReturn) }
             }
             .frame(width: 64)
         }
@@ -493,7 +571,12 @@ struct KeyboardView: View {
     }
 
     private var continuousDeleteButton: some View {
-        ContinuousDeleteKey { if translation.isEditingSource { translation.deleteSourceBackward() } else { requestAction(onDelete) } }
+        ContinuousDeleteKey {
+            if model.correctionEditing { model.deleteCorrectionText() }
+            else if privateReferences.isEditing { privateReferences.deleteBackward() }
+            else if translation.isEditingSource { translation.deleteSourceBackward() }
+            else { requestAction(onDelete) }
+        }
     }
 
     // MARK: - Shared key chrome
@@ -531,7 +614,10 @@ struct KeyboardView: View {
     }
 
     private func requestInsertion(_ text: String) {
-        if translation.isEditingSource { translation.appendSource(text) } else { requestAction { onInsert(text) } }
+        if model.correctionEditing { model.appendCorrectionText(text) }
+        else if privateReferences.isEditing { privateReferences.append(text) }
+        else if translation.isEditingSource { translation.appendSource(text) }
+        else { requestAction { onInsert(text) } }
     }
 
     private func requestAction(_ action: @escaping () -> Void) {

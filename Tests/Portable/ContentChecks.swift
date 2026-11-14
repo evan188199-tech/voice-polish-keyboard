@@ -45,12 +45,26 @@ final class FixtureURLProtocol: URLProtocol, @unchecked Sendable {
         check(!prepared.accept("只需联系供应商。"), "summary/omitted constraints rejected for protected layout")
         check(!prepared.accept(prepared.body.replacingOccurrences(of: "小明", with: "黄晓明")), "provider cannot alter protected list name")
         check(!prepared.accept(prepared.body.replacingOccurrences(of: "不要", with: "要")), "provider cannot drop negation")
+        for (original, altered) in [
+            ("温度-3.5度", "温度3.5度"),
+            ("报价3.5元", "报价35元"),
+            ("日期2026-03-05", "日期20260305"),
+            ("版本v2.1", "版本v21")
+        ] {
+            let source = String(repeating: "原条件必须完整保留。", count: 20) + original
+            let candidate = source.replacingOccurrences(of: original, with: altered)
+            check(!DictationTextPreparation(source, mode: .rewrite).accept(candidate), "strict formatting rejects numeric punctuation mutation")
+        }
+        let shortNumeric = DictationTextPreparation("温度-3.5度。", mode: .rewrite)
+        check(!shortNumeric.accept("温度3.5度。") && !shortNumeric.accept("温度35度。"),
+              "short dictation also rejects changed signs and decimal values")
+        let questionWithNumber = DictationTextPreparation("1+1等于多少？", mode: .askLLM)
+        check(questionWithNumber.accept("2"), "explicit ask mode can return an answer containing different numbers")
         let hk = ChineseScriptConverter.convert(prepared.body, direction: .toTraditional)
         check(hk.contains("聯繫") && hk.contains("3000"), "Hong Kong script path preserves numeric content")
 
         let correctionFixtures: [(String, String)] = [
             ("明天联系小明，小明是黄晓明的晓明。", "明天联系晓明。"),
-            ("发给张伟，伟是伟大的伟。", "发给张伟。"),
             ("聽日搵小明，小明係黃曉明嘅曉明。", "聽日搵曉明。"),
             ("明天联系李丽，李丽是王丽丽的丽丽。", "明天联系丽丽。"),
             ("不是明天，是后天交货。", "后天交货。")
@@ -60,7 +74,7 @@ final class FixtureURLProtocol: URLProtocol, @unchecked Sendable {
             check(result.body == expected && result.original == raw, "scoped spoken correction: \(raw.prefix(12))")
             check(SpokenCorrection.process(result.body, mode: .rewrite).body == result.body, "spoken correction is idempotent")
         }
-        for text in ["小明是黄晓明的晓明", "他解释说，小明是黄晓明的晓明", "明天联系小明和小明，小明是黄晓明的晓明", "他说‘小明是黄晓明的晓明’", "明天联系小明，小明不是黄晓明的晓明", "明天联系小明，小明是黄晓明的明", "不是所有任务都取消", "send /tmp/x to 小明，小明是黄晓明的晓明", "不要修改已插入的宿主"] {
+        for text in ["发给张伟，伟是伟大的伟。", "小明是黄晓明的晓明", "他解释说，小明是黄晓明的晓明", "明天联系小明和小明，小明是黄晓明的晓明", "他说‘小明是黄晓明的晓明’", "明天联系小明，小明不是黄晓明的晓明", "明天联系小明，小明是黄晓明的明", "不是所有任务都取消", "send /tmp/x to 小明，小明是黄晓明的晓明", "不要修改已插入的宿主"] {
             check(SpokenCorrection.process(text, mode: .rewrite).body == text, "ambiguous/quoted/negative/no-target correction is preserved")
         }
         let corrected = DictationTextPreparation("明天联系小明，小明是黄晓明的晓明。", mode: .rewrite)

@@ -58,8 +58,9 @@ final class ClipboardHistoryTests: XCTestCase {
     func testLoadSaveRoundtrip() {
         let defaults = UserDefaults(suiteName: "clipboard-test-\(UUID().uuidString)")!
         var entries: [ClipboardEntry] = []
-        entries = ClipboardHistoryStore.append("alpha", to: entries, at: Date(timeIntervalSince1970: 1000))
-        entries = ClipboardHistoryStore.append("beta", to: entries, at: Date(timeIntervalSince1970: 2000))
+        let now = Date()
+        entries = ClipboardHistoryStore.append("alpha", to: entries, at: now.addingTimeInterval(-1))
+        entries = ClipboardHistoryStore.append("beta", to: entries, at: now)
         ClipboardHistoryStore.save(entries, defaults: defaults)
 
         let loaded = ClipboardHistoryStore.load(defaults: defaults)
@@ -82,7 +83,7 @@ final class ClipboardHistoryTests: XCTestCase {
 
     // MARK: - Mirror store
 
-    func testMirrorMergeReplacesAndFiltersHiddenIDs() {
+    @MainActor func testMirrorMergeReplacesAndFiltersHiddenIDs() {
         let suite = "clipboard-mirror-test-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         let mirror = ClipboardMirrorStore(defaults: defaults)
@@ -102,7 +103,7 @@ final class ClipboardHistoryTests: XCTestCase {
         XCTAssertEqual(visible.first?.id, e2.id)
     }
 
-    func testMirrorClearMarksAllAsHidden() {
+    @MainActor func testMirrorClearMarksAllAsHidden() {
         let defaults = UserDefaults(suiteName: "clipboard-mirror-clear-\(UUID().uuidString)")!
         let mirror = ClipboardMirrorStore(defaults: defaults)
         let e1 = ClipboardEntry(text: "A", createdAt: Date())

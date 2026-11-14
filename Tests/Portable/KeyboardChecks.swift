@@ -7,17 +7,27 @@ actor MockKeyboardBridge: KeyboardBridgeServing {
     private var startError: BridgeErrorCode?
     private var delayStart = false
     private var delayFinish = false
+    private var delayCancel = false
     private var failFinish = false
     private var placeSuggestions = false
+    private var legacyText: String?
+    private var holdStatus = false
+    private var pendingStatus: CheckedContinuation<Void, Never>?
 
     func configure(startError: BridgeErrorCode? = nil, delayStart: Bool = false,
-                   delayFinish: Bool = false, failFinish: Bool = false, placeSuggestions: Bool = false) {
+                   delayFinish: Bool = false, delayCancel: Bool = false, failFinish: Bool = false, placeSuggestions: Bool = false,
+                   legacyText: String? = nil) {
         self.startError = startError
         self.delayStart = delayStart
         self.delayFinish = delayFinish
+        self.delayCancel = delayCancel
         self.failFinish = failFinish
         self.placeSuggestions = placeSuggestions
+        self.legacyText = legacyText
     }
+    func holdNextStatus() { holdStatus = true }
+    func isStatusHeld() -> Bool { pendingStatus != nil }
+    func releaseStatus() { pendingStatus?.resume(); pendingStatus = nil }
     func seedRecording() { recording = true }
     func seedJob(_ text: String) { jobs.append((UUID(), text)) }
     func complete(_ index: Int, text: String) { jobs[index].1 = text }
@@ -47,18 +57,24 @@ actor MockKeyboardBridge: KeyboardBridgeServing {
             if delayFinish { try await Task.sleep(nanoseconds: 60_000_000) }
             if recording {
                 recording = false
-                let id = UUID()
-                jobs.append((id, nil))
-                if failFinish { throw URLError(.networkConnectionLost) }
-                response = .ok(status: status(), jobID: id)
+                if let legacyText {
+                    response = .text(legacyText, status: status())
+                } else {
+                    let id = UUID()
+                    jobs.append((id, nil))
+                    if failFinish { throw URLError(.networkConnectionLost) }
+                    response = .ok(status: status(), jobID: id)
+                }
             } else { response = .error("未录音", code: .notRecording) }
         case .cancel:
+            if delayCancel { try await Task.sleep(nanoseconds: 200_000_000) }
             recording = false
             response = .ok(status: status())
         case .status:
             // A later result is ready first; only the head may be consumed.
             if let (id, text) = jobs.first, let text {
                 jobs.removeFirst()
+                if holdStatus { holdStatus = false; await withCheckedContinuation { pendingStatus = $0 } }
                 let candidates = placeSuggestions ? PlaceNameMatcher.suggestions(in: text,
                     entries: [PlaceNameEntry(name: "桂林", aliases: ["贵林"])], script: .simplified) : []
                 response = .text(text, status: status(), jobID: id, placeSuggestions: candidates)
@@ -96,6 +112,11 @@ actor PortableTranslationProvider: TextTranslating {
     @MainActor static func makeModel(_ bridge: MockKeyboardBridge, defaults: UserDefaults? = nil) async -> KeyboardViewModel {
         let defaults = defaults ?? UserDefaults(suiteName: "keyboard-check-\(UUID())")!
         let model = KeyboardViewModel(client: bridge, defaults: defaults)
+        // Test-only injection simulates a future compatible host. Real BridgeResponse
+        // remains unchanged and production defaults to missing-metadata quarantine.
+        model.testCorrectionDisposition = { _, text in
+            CorrectionReviewProposal.mayNeedReview(text) ? .review(rawTranscript: text) : .normal
+        }
         model.canExplicitlyInsert = { true }
         model.onCaptureDestination = { _ in }
         model.onDeliverDestination = { [weak model] _, text in
@@ -163,6 +184,35 @@ actor PortableTranslationProvider: TextTranslating {
         model.disconnect()
         await pause()
 
+        let pendingCancelBridge = MockKeyboardBridge()
+        await pendingCancelBridge.configure(delayStart: true, delayCancel: true)
+        let pendingCancelModel = await makeModel(pendingCancelBridge)
+        let pendingStart = Task { await pendingCancelModel.toggleRecording() }
+        await pause(10)
+        let pendingCancel = Task { await pendingCancelModel.cancelRecording() }
+        await pause(90)
+        check(pendingCancelModel.capture.phase == .cancelling && !pendingCancelModel.isRecording,
+              "late start acknowledgement cannot overwrite pending cancellation")
+        await pendingStart.value; await pendingCancel.value
+        check(!pendingCancelModel.isRecording && pendingCancelModel.capture.phase == .idle,
+              "cancel after pending start settles without committing")
+        pendingCancelModel.disconnect()
+
+        let legacyBridge = MockKeyboardBridge()
+        await legacyBridge.configure(legacyText: "旧协议结果")
+        let legacyModel = await makeModel(legacyBridge)
+        var legacyInserted: [String] = []
+        legacyModel.onTextReady = { legacyInserted.append($0) }
+        legacyModel.onDeliverDestination = { _, _ in false }
+        await legacyModel.toggleRecording(); await legacyModel.toggleRecording()
+        check(legacyInserted.isEmpty && legacyModel.correctionReview != nil && legacyModel.correctionMetadataUnknown,
+              "legacy immediate result is quarantined when metadata is missing")
+        let legacyReviewID = legacyModel.correctionReviewID!
+        legacyModel.chooseCorrectionOriginal(reviewID: legacyReviewID)
+        legacyModel.useCorrection(reviewID: legacyReviewID)
+        check(legacyInserted == ["旧协议结果"], "legacy result requires explicit recovery")
+        legacyModel.disconnect()
+
         let restoredBridge = MockKeyboardBridge()
         await restoredBridge.seedRecording()
         let restored = await makeModel(restoredBridge)
@@ -193,6 +243,138 @@ actor PortableTranslationProvider: TextTranslating {
         check(attempts == 1 && queued == 1, "lost finish reply never resubmits committed audio")
         lost.disconnect()
 
+        // Partial keyboard fallback: the raw correction phrase must still be in
+        // the returned text. A per-job bridge signal does not exist yet.
+        let realLegacyBridge = MockKeyboardBridge()
+        let realLegacy = KeyboardViewModel(client: realLegacyBridge, defaults: UserDefaults(suiteName: "legacy-metadata-\(UUID())")!)
+        var realLegacyOutputs: [String] = []
+        realLegacy.onTextReady = { realLegacyOutputs.append($0) }
+        realLegacy.onCaptureDestination = { _ in }
+        realLegacy.onDeliverDestination = { _, text in realLegacyOutputs.append(text); return true }
+        realLegacy.appear(); await realLegacy.connect()
+        await pause(300)
+        check(realLegacy.correctionReview == nil, "waiting and ping responses need no correction metadata")
+        await realLegacy.toggleRecording(); await realLegacy.toggleRecording()
+        await realLegacyBridge.complete(0, text: "普通听写")
+        await pause(600)
+        check(realLegacy.correctionReview != nil && realLegacy.correctionMetadataUnknown && realLegacyOutputs.isEmpty,
+              "actual legacy response without flat metadata quarantines even ordinary text")
+        if let id = realLegacy.correctionReviewID { realLegacy.cancelCorrection(reviewID: id) }
+        realLegacy.disconnect()
+
+        let rawFixtureBridge = MockKeyboardBridge()
+        let rawFixture = await makeModel(rawFixtureBridge)
+        let syntheticRaw = "明天联系小明，把小明改成晓明。"
+        rawFixture.testCorrectionDisposition = { _, _ in .review(rawTranscript: syntheticRaw) }
+        await rawFixture.toggleRecording(); await rawFixture.toggleRecording()
+        await rawFixtureBridge.complete(0, text: "主应用已处理文字")
+        await pause(600)
+        check(rawFixture.correctionReview?.restoreOriginal() == syntheticRaw && !rawFixture.correctionMetadataUnknown,
+              "mock compatible host routes job-bound raw text to review")
+        if let id = rawFixture.correctionReviewID { rawFixture.cancelCorrection(reviewID: id) }
+        rawFixture.disconnect()
+
+        let correctionBridge = MockKeyboardBridge()
+        let correctionModel = await makeModel(correctionBridge)
+        var correctionOutputs: [String] = []
+        correctionModel.canExplicitlyInsert = { true }
+        correctionModel.onTextReady = { correctionOutputs.append($0) }
+        correctionModel.onCaptureDestination = { _ in }
+        correctionModel.onDeliverDestination = { _, text in correctionOutputs.append(text); return true }
+        await correctionModel.toggleRecording(); await correctionModel.toggleRecording()
+        await correctionModel.toggleRecording(); await correctionModel.toggleRecording()
+        await correctionBridge.complete(0, text: "明天联系小明，把小明改成晓明。")
+        await correctionBridge.complete(1, text: "普通后续。")
+        await pause(650)
+        let correctionQueued = await correctionBridge.jobCount()
+        check(correctionModel.correctionReview != nil && correctionOutputs.isEmpty && correctionQueued == 1,
+              "recognizable raw correction opens review and holds later jobs")
+        let correctionID = correctionModel.correctionReviewID!
+        correctionModel.chooseCorrection("晓明", reviewID: correctionID)
+        correctionModel.useCorrection(reviewID: correctionID); correctionModel.useCorrection(reviewID: correctionID)
+        await pause(500)
+        check(correctionOutputs == ["明天联系晓明。", "普通后续。"], "explicit correction inserts once and releases next result in order")
+        correctionModel.disconnect()
+
+        let lateCorrectionBridge = MockKeyboardBridge()
+        let lateCorrection = await makeModel(lateCorrectionBridge)
+        await lateCorrection.toggleRecording(); await lateCorrection.toggleRecording()
+        await lateCorrectionBridge.holdNextStatus()
+        await lateCorrectionBridge.complete(0, text: "联系小明，把小明改成晓明。")
+        for _ in 0..<100 {
+            if await lateCorrectionBridge.isStatusHeld() { break }
+            await pause(10)
+        }
+        let wasHeld = await lateCorrectionBridge.isStatusHeld()
+        check(wasHeld, "fixture holds result after host consumed it")
+        lateCorrection.disconnect()
+        await lateCorrectionBridge.releaseStatus()
+        await pause(150)
+        check(lateCorrection.correctionReview != nil && lateCorrection.heldResult == nil,
+              "correction arriving after disappearance remains a review, not an insertable raw result")
+        lateCorrection.cancelCorrection(reviewID: lateCorrection.correctionReviewID!)
+
+        let staleActionBridge = MockKeyboardBridge()
+        let staleActionModel = await makeModel(staleActionBridge)
+        await staleActionModel.toggleRecording(); await staleActionModel.toggleRecording()
+        await staleActionModel.toggleRecording(); await staleActionModel.toggleRecording()
+        await staleActionBridge.complete(0, text: "联系小明，把小明改成晓明。")
+        await staleActionBridge.complete(1, text: "联系阿文，把阿文改成阿明。")
+        await pause(600)
+        let oldReviewID = staleActionModel.correctionReviewID!
+        let oldCancel: () -> Void = { staleActionModel.cancelCorrection(reviewID: oldReviewID) }
+        oldCancel()
+        await pause(450)
+        check(staleActionModel.correctionReview != nil, "second correction awaits its own review")
+        oldCancel()
+        check(staleActionModel.correctionReview != nil, "stale cancel cannot discard a newer review")
+        if let current = staleActionModel.correctionReviewID { staleActionModel.cancelCorrection(reviewID: current) }
+        staleActionModel.disconnect()
+
+        let restorationDefaults = UserDefaults(suiteName: "correction-restore-\(UUID())")!
+        let restorationBridge = MockKeyboardBridge()
+        let restoration = await makeModel(restorationBridge, defaults: restorationDefaults)
+        await restoration.toggleRecording(); await restoration.toggleRecording()
+        await restorationBridge.complete(0, text: "联系小明，把小明改成晓明。")
+        await pause(600)
+        let beforeHideID = restoration.correctionReviewID!
+        restoration.chooseCorrection("晓明", reviewID: beforeHideID)
+        restoration.disconnect()
+        restoration.cancelCorrection(reviewID: beforeHideID)
+        check(restoration.correctionReview?.phase == .reviewing && restoration.correctionReviewID != beforeHideID,
+              "hiding resets confirmation and invalidates old appearance actions")
+        let reconstructed = KeyboardViewModel(client: MockKeyboardBridge(), defaults: restorationDefaults)
+        check(reconstructed.correctionReview?.phase == .reviewing && reconstructed.correctionReview?.restoreOriginal() == "联系小明，把小明改成晓明。",
+              "restart restores raw review and requires a fresh explicit choice")
+        reconstructed.cancelCorrection(reviewID: reconstructed.correctionReviewID!)
+
+        let legacyCorrectionBridge = MockKeyboardBridge()
+        await legacyCorrectionBridge.configure(legacyText: "明天联系小明，把小明改成晓明。")
+        let legacyCorrection = await makeModel(legacyCorrectionBridge)
+        var legacyReviewInserted: [String] = []
+        legacyCorrection.onDeliverDestination = { _, text in legacyReviewInserted.append(text); return true }
+        await legacyCorrection.toggleRecording(); await legacyCorrection.toggleRecording()
+        check(legacyCorrection.correctionReview != nil && legacyReviewInserted.isEmpty,
+              "legacy immediate correction also enters review before delivery")
+        legacyCorrection.cancelCorrection(reviewID: legacyCorrection.correctionReviewID!); legacyCorrection.disconnect()
+
+        let unknownBridge = MockKeyboardBridge()
+        let unknownModel = await makeModel(unknownBridge)
+        var unknownOutputs: [String] = []
+        unknownModel.canExplicitlyInsert = { false }
+        unknownModel.onTextReady = { unknownOutputs.append($0) }
+        await unknownModel.toggleRecording(); await unknownModel.toggleRecording()
+        await unknownBridge.complete(0, text: "小明是黄晓明的晓明。")
+        await pause(600)
+        check(unknownModel.correctionReview?.proposal?.draft == nil && unknownOutputs.isEmpty,
+              "missing target stays in review without invented text")
+        let unknownID = unknownModel.correctionReviewID!
+        unknownModel.chooseCorrectionOriginal(reviewID: unknownID); unknownModel.useCorrection(reviewID: unknownID)
+        check(unknownOutputs.isEmpty && unknownModel.correctionReview != nil, "unavailable explicit destination retains review")
+        unknownModel.cancelCorrection(reviewID: unknownID); unknownModel.useCorrection(reviewID: unknownID)
+        check(unknownModel.correctionReview == nil && unknownOutputs.isEmpty, "cancel invalidates old review")
+        unknownModel.disconnect()
+
         let reviewBridge = MockKeyboardBridge()
         await reviewBridge.configure(placeSuggestions: true)
         let reviewModel = await makeModel(reviewBridge)
@@ -222,8 +404,12 @@ actor PortableTranslationProvider: TextTranslating {
         translation.onAutomaticInsert = { [weak translation] _, text in guard let insert = translation?.onInsert else { return false }; insert(text); return true }
         await translation.appear(hasFullAccess: true, hostSessionID: UUID())
         mixed.startTranslation(.english, translation: translation)
+        mixed.startTranslation(.english, translation: translation)
         await pause(100)
         check(mixed.isRecording, "translation selection starts one actual mock recording")
+        let translationStarts = await mixedBridge.count(.start)
+        let prematureFinishes = await mixedBridge.count(.finishTranslation)
+        check(translationStarts == 1 && prematureFinishes == 0, "translation selection/release starts exactly once and never stops capture")
         await mixed.toggleRecording()
         let translationFinishCount = await mixedBridge.count(.finishTranslation)
         check(translationFinishCount == 1, "translation capture is committed with its own bridge command")
@@ -351,6 +537,67 @@ actor PortableTranslationProvider: TextTranslating {
               "translation recovery releases following dictation in order")
         blockedTranslation.disappear(); blockedModel.disconnect()
 
+        let verifiedDictationBridge = MockKeyboardBridge()
+        let verifiedDictation = await makeModel(verifiedDictationBridge)
+        var dictationGuard = TranslationDeliveryGuard()
+        let dictationField = UUID()
+        var verifiedDictationResults: [String] = []
+        verifiedDictation.onCaptureDestination = { id in
+            dictationGuard.capture(id, document: dictationField, visible: true, connected: true, continuityVerified: true)
+        }
+        verifiedDictation.onDeliverDestination = { id, text in
+            guard dictationGuard.consume(id, document: dictationField, visible: true, connected: true) else { return false }
+            verifiedDictationResults.append(text); return true
+        }
+        await verifiedDictation.toggleRecording(); await verifiedDictation.toggleRecording()
+        await verifiedDictationBridge.complete(0, text: "虚构整理结果")
+        await pause(650)
+        check(verifiedDictationResults == ["虚构整理结果"], "verified mock target receives dictation directly once")
+        await pause(300)
+        check(verifiedDictationResults.count == 1, "verified mock dictation is not reinserted")
+        verifiedDictation.disconnect()
+
+        // Simulate a future host that supplies trustworthy continuity evidence.
+        // This exercises the real guard with the full keyboard/mock voice flow;
+        // UIKit currently does not claim or enable that evidence.
+        let verifiedBridge = MockKeyboardBridge()
+        let verifiedKeyboard = await makeModel(verifiedBridge)
+        let verifiedTranslation = TranslationViewModel(service: PortableTranslationProvider(),
+            defaults: UserDefaults(suiteName: "verified-voice-\(UUID())")!)
+        var verifiedGuard = TranslationDeliveryGuard()
+        let verifiedFieldA = UUID(), verifiedFieldB = UUID()
+        var verifiedCurrentField = verifiedFieldA
+        var verifiedInserted: [String] = []
+        verifiedTranslation.onInsert = { verifiedInserted.append($0) }
+        verifiedTranslation.canExplicitlyInsert = { true }
+        verifiedTranslation.onCaptureTarget = { id in
+            verifiedGuard.capture(id, document: verifiedCurrentField, visible: true, connected: true, continuityVerified: true)
+        }
+        verifiedTranslation.onAutomaticInsert = { id, text in
+            guard verifiedGuard.consume(id, document: verifiedCurrentField, visible: true, connected: true) else { return false }
+            verifiedInserted.append(text); return true
+        }
+        verifiedTranslation.onAbandonTarget = { id in verifiedGuard.abandon(id) }
+        await verifiedTranslation.appear(hasFullAccess: true, hostSessionID: UUID())
+        verifiedKeyboard.startTranslation(.english, translation: verifiedTranslation)
+        await pause(100); await verifiedKeyboard.toggleRecording()
+        await verifiedBridge.complete(0, text: "同一输入框")
+        await pause(950)
+        check(verifiedInserted == ["Translated."], "verified mock target receives voice translation directly exactly once")
+        await pause(300)
+        check(verifiedInserted.count == 1, "verified target does not redeliver an acknowledged result")
+        verifiedKeyboard.startTranslation(.english, translation: verifiedTranslation)
+        await pause(100); await verifiedKeyboard.toggleRecording()
+        verifiedCurrentField = verifiedFieldB
+        verifiedGuard.invalidate()
+        await verifiedBridge.complete(0, text: "旧字段原文")
+        await pause(950)
+        check(verifiedInserted == ["Translated."] && verifiedTranslation.lastTranslationCanInsert,
+              "changed mock target quarantines voice translation rather than inserting")
+        verifiedTranslation.insertLastTranslation()
+        check(verifiedInserted == ["Translated.", "Translated."], "explicit recovery inserts into currently selected mock field")
+        verifiedTranslation.disappear(); verifiedKeyboard.disconnect()
+
         var cursor = OrderedDeliveryCursor()
         check(!cursor.canDeliver(sequence: 2) && cursor.canDeliver(sequence: 1), "production ordered cursor blocks second result")
         cursor.advance()
@@ -361,6 +608,8 @@ actor PortableTranslationProvider: TextTranslating {
         await ContentChecks.run()
         await PlaceChecks.run()
         await MaterialChecks.run()
+        await PrivateIndexChecks.run()
+        await NotionPreviewChecks.run()
         print("Keyboard logic checks completed (Apple frameworks replaced; no iOS UI/audio validation).")
     }
 }

@@ -6,6 +6,7 @@ final class KeyboardViewController: UIInputViewController {
     private var host: UIHostingController<KeyboardView>?
     private let viewModel = KeyboardViewModel()
     private let translationModel = TranslationViewModel(service: BridgeTranslationService())
+    private let privateReferenceModel = PrivateReferenceSearchModel()
     private var translationAppearanceTask: Task<Void, Never>?
     private var translationVisible = false
     private var translationDeliveryGuard = TranslationDeliveryGuard()
@@ -84,6 +85,7 @@ final class KeyboardViewController: UIInputViewController {
         translationAppearanceTask?.cancel()
         translationAppearanceTask = nil
         translationModel.disappear()
+        privateReferenceModel.close()
         viewModel.onTextReady = nil
         viewModel.canExplicitlyInsert = nil
         translationModel.canExplicitlyInsert = nil
@@ -110,6 +112,7 @@ final class KeyboardViewController: UIInputViewController {
         let keyboard = KeyboardView(
             model: viewModel,
             translation: translationModel,
+            privateReferences: privateReferenceModel,
             onInsert: { [weak self] text in
                 self?.textDocumentProxy.insertText(text)
             },

@@ -78,6 +78,16 @@ check(TranslationSpeakGesture.ended(elapsed: 0.5, horizontal: -100, vertical: -6
 check(TranslationSpeakGesture.ended(elapsed: 0.5, horizontal: 100, vertical: -60, width: 300, targetCount: 3, canTranslate: true) == .translate(2), "hold up and select third target")
 check(TranslationSpeakGesture.ended(elapsed: 0.5, horizontal: 0, vertical: -60, width: 300, targetCount: 0, canTranslate: true) == .none, "empty targets never start capture")
 check(TranslationSpeakGesture.ended(elapsed: 0.5, horizontal: 0, vertical: -60, width: 300, targetCount: 3, canTranslate: false) == .none, "unavailable service never starts capture")
+check(TranslationSpeakGesture.ended(elapsed: -1, horizontal: 0, vertical: 0, width: 300, targetCount: 3, canTranslate: true) == .none,
+      "negative gesture duration never starts dictation")
+check(TranslationSpeakGesture.ended(elapsed: .nan, horizontal: 0, vertical: -100, width: 300, targetCount: 3, canTranslate: true) == .none,
+      "non-finite gesture duration never starts translation")
+check(TranslationSpeakGesture.ended(elapsed: 0.4, horizontal: .nan, vertical: -100, width: 300, targetCount: 3, canTranslate: true) == .none,
+      "non-finite gesture coordinates cannot select a target")
+check(TranslationSpeakGesture.selection(elapsed: 0.35, horizontal: 150, vertical: -45, width: 300, targetCount: 3) == 2,
+      "threshold-edge hold selects the last valid target")
+check(TranslationSpeakGesture.selection(elapsed: 0.35, horizontal: 151, vertical: -45, width: 300, targetCount: 3) == nil,
+      "drag outside target row does not select a language")
 let english = TranslationTarget.english
 check(english.script == nil && english.instruction.contains("Output English"), "English target has no forced Chinese script")
 check(TranslationTarget.traditionalHK.language == .chinese && TranslationTarget.traditionalHK.script == .traditionalHK, "language and script are independent")
@@ -391,3 +401,15 @@ let unverified = UUID()
 guardFixture.capture(unverified, document: fieldA, visible: true, connected: true)
 check(!guardFixture.consume(unverified, document: fieldA, visible: true, connected: true),
       "matching document and no observed change do not prove continuity")
+
+actor MismatchedBridgeTranslator: TextTranslating {
+    var capability: TranslationCapability { get async { fixtureCapability() } }
+    func translate(_ request: TranslationRequest) async throws -> TranslationEvent {
+        let different = TranslationContext(target: .simplified, sourceKind: request.context.sourceKind, consentServiceID: "fixture-service")
+        return TranslationEvent(context: different, source: request.source, translation: "错误样例", failure: nil)
+    }
+}
+let mismatchedHandler = TranslationBridgeHandler(service: MismatchedBridgeTranslator())
+let mismatchedReply = await mismatchedHandler.handle(TranslationBridgePayload(operation: .translateText, request: deniedRequest), targets: [.english])
+check(mismatchedReply.event == nil && mismatchedReply.failure == .invalidResult,
+      "bridge rejects response for another translation context")

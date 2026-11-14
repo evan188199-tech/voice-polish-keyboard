@@ -25,11 +25,15 @@
 		423AC54996968553519B6A78 /* BridgeTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8377EC6BD19BA37BFA7BD674 /* BridgeTransport.swift */; };
 		43C703EDC73593A06360206E /* ASRCompareModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 947E6FBA0D4254FAA504617A /* ASRCompareModels.swift */; };
 		44BF3AC8D20033839289DFF8 /* ClipboardHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75774F5FC162819FC6CF6D23 /* ClipboardHistory.swift */; };
+		46D9E5F3495486D609179831 /* NotionSourceMetadata.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6F394203F0BBB4459C1FE88 /* NotionSourceMetadata.swift */; };
 		4DB0022F81250CA01636763F /* VoiceKeyboardCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE0180D06B911D5851DE5D68 /* VoiceKeyboardCapture.swift */; };
 		54DC8190BBB277318ED7D594 /* TranslationContentGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B0BF26D0F776C54856CBF4D /* TranslationContentGuard.swift */; };
+		56D325EF387FDB403B6F589A /* CorrectionReview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F06B25CDB281F462E97C308 /* CorrectionReview.swift */; };
+		5832D5FB5DABC4F66BA3EA8E /* PrivateReferenceIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 608FE64F279E3DE9528CBC8B /* PrivateReferenceIndex.swift */; };
 		5A3B6A32C929DE5B0211B442 /* SpokenCorrection.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE4B3D0216960001F140BBC7 /* SpokenCorrection.swift */; };
 		5A6CA211E120858BD11E9941 /* WireMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6AF26D477C5E5EA0629253E /* WireMessage.swift */; };
 		5AA75BA57D61B8593AF95693 /* PrivateMaterialPrototypeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAFEAAD09F2F50FB9010215F /* PrivateMaterialPrototypeView.swift */; };
+		5B38441843162B55CE19D62C /* PrivateReferenceIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 608FE64F279E3DE9528CBC8B /* PrivateReferenceIndex.swift */; };
 		5BFD17D307C2FA4F0D176F28 /* TextPolishing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BBB68977804759BC02CA286 /* TextPolishing.swift */; };
 		5C253598DE0220968EF10148 /* AppServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = 265E68080AC320E2A1ADC738 /* AppServices.swift */; };
 		5CF94F7B3EF68645367DF661 /* BuildToken.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3D0E6A8CFCCC640A2E31136 /* BuildToken.swift */; };
@@ -37,6 +41,7 @@
 		5D658D01F5B19AB86A7087B1 /* AppleOnDeviceTranscriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = 066B18D1E75DAAC409FFF214 /* AppleOnDeviceTranscriber.swift */; };
 		607919E84C899A86DB927776 /* ChineseScriptConverter.swift in Sources */ = {isa = PBXBuildFile; fileRef = F92C0F104846EDF501406C06 /* ChineseScriptConverter.swift */; };
 		608C7B2ECDC4E492E892FF82 /* PlaceNameReview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 317BBECD25CF92A53F75A1E7 /* PlaceNameReview.swift */; };
+		61861BF6C563203C75C1BBD8 /* CorrectionReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E2D01656CA75EB8DB70FEFF /* CorrectionReviewView.swift */; };
 		6792C922C73B89658530E5E3 /* TranslationPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7171574A67AC849E1D34BCB /* TranslationPreferences.swift */; };
 		69E04B03AB598049AB17F7C0 /* TranslationDeliveryGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB921A96BB91F89778C2C1D6 /* TranslationDeliveryGuard.swift */; };
 		6A08713DEC5B3AF026AD3DCA /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20FE5D4A2B72A85F661B98D /* AppSettings.swift */; };
@@ -44,7 +49,9 @@
 		6FB3D0981E9E85840AAA6C43 /* VoiceKeyboardCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE0180D06B911D5851DE5D68 /* VoiceKeyboardCapture.swift */; };
 		7005EC738FE6FEC3F0DC4850 /* PlaceNameDictionaryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 348487EA5F9FED773BA465AD /* PlaceNameDictionaryView.swift */; };
 		7113B7EC19A2CB864B69C60F /* KeyboardBridgeServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 296D0CAEBFAB507176B3120D /* KeyboardBridgeServer.swift */; };
+		711899FC1F7D28556BA12109 /* NotionHTTPTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09CE63425B407FAFC444E689 /* NotionHTTPTransport.swift */; };
 		74461A94F5803758ACA1DE65 /* TranslationPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8B03A04CCFE10218662018C /* TranslationPreviewView.swift */; };
+		789ACCBC65BCD8B4AAAF4E54 /* NotionPrivatePreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2496352F8EE70E66EEFD7535 /* NotionPrivatePreview.swift */; };
 		7E9636BB5DD821C419958E1A /* TranslationDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77980685C71555B056B05581 /* TranslationDraft.swift */; };
 		7EEBE20DBAF48FBF6DA10519 /* ClipboardHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABEE5CAD724D4DDF4085D913 /* ClipboardHistoryView.swift */; };
 		8249E7DF06A518EB4031B994 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEC4A3C7E7946CFC78C2953B /* SettingsView.swift */; };
@@ -67,9 +74,11 @@
 		A797F771B51F93494D16B090 /* FaithfulTextFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 403DEF05BE6CDDD9D792F48E /* FaithfulTextFormatter.swift */; };
 		A86A1BAF9D1E69EBC0EBD7B8 /* SpeechTranscribing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BCEE758CC4BA2F9D6D92719 /* SpeechTranscribing.swift */; };
 		A99A6D21180BB1CF4684EAE8 /* AudioRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 136F00918E6BCE2087AE5A95 /* AudioRecorder.swift */; };
+		AA1497F7635BF113A992350A /* PrivateReferenceSearchModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B0C111968957D36D42BFE70 /* PrivateReferenceSearchModel.swift */; };
 		AAB64C34CD2279B51C72505B /* PolishMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3305F071C6EEA40A03F26942 /* PolishMode.swift */; };
 		AAB9CD5E407CA327EB28D2CC /* TranslationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CAC1CD50908D190D98793B8 /* TranslationService.swift */; };
 		AE396831AEECD305156EEA2E /* KeyboardViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3CC6B076D89E1B6CDA7E7AC /* KeyboardViewModel.swift */; };
+		AEFDC3AEF555B51CBD34E753 /* CorrectionReview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F06B25CDB281F462E97C308 /* CorrectionReview.swift */; };
 		AF17C45D51F1ECBD2C93D932 /* TranslationRequestExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63F76E3864780C7D9F44DECE /* TranslationRequestExecutor.swift */; };
 		B1340313FA2EDAA06CAD71DF /* VoiceSessionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7CACD28D5A5CF864C5293C0 /* VoiceSessionCoordinator.swift */; };
 		B177B7736D101F78A487C7D9 /* LocalTextProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74BF38A2C1A016749A3294DE /* LocalTextProcessor.swift */; };
@@ -89,7 +98,9 @@
 		E827F23053F6B430DE892C3A /* PolishMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3305F071C6EEA40A03F26942 /* PolishMode.swift */; };
 		E864564E9651FAD205CB102D /* VocabularyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6454ED31C9E7BE3BF25B6ACB /* VocabularyView.swift */; };
 		EA963925E64565DC6111860C /* DeleteRepeatController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F889D99651360D99CBF82D6 /* DeleteRepeatController.swift */; };
+		F1B4B5D27D7285500464EA78 /* ProtectedPrivateIndexStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5BCFE1FAD8239171AF5C4FF /* ProtectedPrivateIndexStorage.swift */; };
 		F366520F7AB8352B27EB308A /* VoicePolishShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 221ACC26548F917E6558A2A1 /* VoicePolishShortcuts.swift */; };
+		F614C6B9DE87F18B4E8D61AE /* NotionImportFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 867517F51A01BB0C6986170E /* NotionImportFlow.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -128,6 +139,7 @@
 		05CA494D2608B995536F4DB6 /* TranslationBridgeHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationBridgeHandler.swift; sourceTree = "<group>"; };
 		066B18D1E75DAAC409FFF214 /* AppleOnDeviceTranscriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleOnDeviceTranscriber.swift; sourceTree = "<group>"; };
 		08A3CBC529B7B797B3E95E72 /* TestInputView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestInputView.swift; sourceTree = "<group>"; };
+		09CE63425B407FAFC444E689 /* NotionHTTPTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotionHTTPTransport.swift; sourceTree = "<group>"; };
 		09E19B940612EB5883B7069F /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		0CAC1CD50908D190D98793B8 /* TranslationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationService.swift; sourceTree = "<group>"; };
 		0E6009C79BB89DF9F686ED24 /* TranslationViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationViewModel.swift; sourceTree = "<group>"; };
@@ -137,9 +149,11 @@
 		1B0BF26D0F776C54856CBF4D /* TranslationContentGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationContentGuard.swift; sourceTree = "<group>"; };
 		221ACC26548F917E6558A2A1 /* VoicePolishShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoicePolishShortcuts.swift; sourceTree = "<group>"; };
 		233F962443EAB61323D3CD8D /* KeyboardBridgeClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardBridgeClient.swift; sourceTree = "<group>"; };
+		2496352F8EE70E66EEFD7535 /* NotionPrivatePreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotionPrivatePreview.swift; sourceTree = "<group>"; };
 		265E68080AC320E2A1ADC738 /* AppServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppServices.swift; sourceTree = "<group>"; };
 		294377F6454820CF3382DFEE /* ClipboardCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardCapture.swift; sourceTree = "<group>"; };
 		296D0CAEBFAB507176B3120D /* KeyboardBridgeServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardBridgeServer.swift; sourceTree = "<group>"; };
+		2F06B25CDB281F462E97C308 /* CorrectionReview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CorrectionReview.swift; sourceTree = "<group>"; };
 		317BBECD25CF92A53F75A1E7 /* PlaceNameReview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaceNameReview.swift; sourceTree = "<group>"; };
 		3305F071C6EEA40A03F26942 /* PolishMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PolishMode.swift; sourceTree = "<group>"; };
 		348487EA5F9FED773BA465AD /* PlaceNameDictionaryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaceNameDictionaryView.swift; sourceTree = "<group>"; };
@@ -152,12 +166,14 @@
 		5CE168628B543948A9B95960 /* Constants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Constants.swift; sourceTree = "<group>"; };
 		5D66C06B3491CEA7D35D3AFC /* ShiftStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShiftStateTests.swift; sourceTree = "<group>"; };
 		5F0E278F0F44132A152A4129 /* BridgeTranslationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeTranslationService.swift; sourceTree = "<group>"; };
+		608FE64F279E3DE9528CBC8B /* PrivateReferenceIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateReferenceIndex.swift; sourceTree = "<group>"; };
 		622FA1EB70353C4DAEDEFC7E /* VoicePolishApp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = VoicePolishApp.entitlements; sourceTree = "<group>"; };
 		63F76E3864780C7D9F44DECE /* TranslationRequestExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationRequestExecutor.swift; sourceTree = "<group>"; };
 		6454ED31C9E7BE3BF25B6ACB /* VocabularyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VocabularyView.swift; sourceTree = "<group>"; };
 		67B0B745D22E6B5C915ED162 /* VoicePolishKeyboardTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = VoicePolishKeyboardTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		6815EC19B0869DBCB6CBF7C6 /* DictationHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationHistoryView.swift; sourceTree = "<group>"; };
 		6BF194F5749CC6181F849EB2 /* VoicePolishKeyboardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoicePolishKeyboardTests.swift; sourceTree = "<group>"; };
+		6E2D01656CA75EB8DB70FEFF /* CorrectionReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CorrectionReviewView.swift; sourceTree = "<group>"; };
 		721FEF9779B81D1628AC3CE9 /* TranslationSpeakControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationSpeakControl.swift; sourceTree = "<group>"; };
 		74BF38A2C1A016749A3294DE /* LocalTextProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalTextProcessor.swift; sourceTree = "<group>"; };
 		74E8C9A76C912B5830A8B1F8 /* ClipboardHistoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardHistoryTests.swift; sourceTree = "<group>"; };
@@ -165,7 +181,9 @@
 		7651F722C72A695EB3466E16 /* TranslationSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationSettingsView.swift; sourceTree = "<group>"; };
 		77980685C71555B056B05581 /* TranslationDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationDraft.swift; sourceTree = "<group>"; };
 		7A21D46B99FD776275FBBA97 /* VocabularyEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VocabularyEntry.swift; sourceTree = "<group>"; };
+		7B0C111968957D36D42BFE70 /* PrivateReferenceSearchModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateReferenceSearchModel.swift; sourceTree = "<group>"; };
 		8377EC6BD19BA37BFA7BD674 /* BridgeTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeTransport.swift; sourceTree = "<group>"; };
+		867517F51A01BB0C6986170E /* NotionImportFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotionImportFlow.swift; sourceTree = "<group>"; };
 		89A580E9DD9B59FA759770C8 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		8A2338557B1E88199A69C546 /* PrivateMaterialPrototype.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateMaterialPrototype.swift; sourceTree = "<group>"; };
 		9165CD4DBE8B8C26C487D6EA /* PlaceNameDictionary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaceNameDictionary.swift; sourceTree = "<group>"; };
@@ -174,6 +192,7 @@
 		ABEE5CAD724D4DDF4085D913 /* ClipboardHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardHistoryView.swift; sourceTree = "<group>"; };
 		B078431C4741DAEB47165516 /* DictationHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationHistory.swift; sourceTree = "<group>"; };
 		B3CC6B076D89E1B6CDA7E7AC /* KeyboardViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardViewModel.swift; sourceTree = "<group>"; };
+		B6F394203F0BBB4459C1FE88 /* NotionSourceMetadata.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotionSourceMetadata.swift; sourceTree = "<group>"; };
 		B7CACD28D5A5CF864C5293C0 /* VoiceSessionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceSessionCoordinator.swift; sourceTree = "<group>"; };
 		BAFEBE107F8F228CD5240F68 /* VoicePolishApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoicePolishApp.swift; sourceTree = "<group>"; };
 		BB921A96BB91F89778C2C1D6 /* TranslationDeliveryGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationDeliveryGuard.swift; sourceTree = "<group>"; };
@@ -183,6 +202,7 @@
 		C8B03A04CCFE10218662018C /* TranslationPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationPreviewView.swift; sourceTree = "<group>"; };
 		CD50D0DC5211E0D9E5A58908 /* Keyboard.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Keyboard.entitlements; sourceTree = "<group>"; };
 		D3D0E6A8CFCCC640A2E31136 /* BuildToken.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuildToken.swift; sourceTree = "<group>"; };
+		D5BCFE1FAD8239171AF5C4FF /* ProtectedPrivateIndexStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtectedPrivateIndexStorage.swift; sourceTree = "<group>"; };
 		D7A62B2E5B0224CA72BD9468 /* Keyboard.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = Keyboard.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		D9A2555DDBE7BD1352107C0F /* KeyboardViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardViewController.swift; sourceTree = "<group>"; };
 		DE942AADB7FCC411BE79E532 /* VoicePipelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoicePipelineTests.swift; sourceTree = "<group>"; };
@@ -236,6 +256,7 @@
 			children = (
 				ABEE5CAD724D4DDF4085D913 /* ClipboardHistoryView.swift */,
 				09E19B940612EB5883B7069F /* ContentView.swift */,
+				6E2D01656CA75EB8DB70FEFF /* CorrectionReviewView.swift */,
 				6815EC19B0869DBCB6CBF7C6 /* DictationHistoryView.swift */,
 				F41457A99C43EB0F768DE9C6 /* KeyboardGuideView.swift */,
 				348487EA5F9FED773BA465AD /* PlaceNameDictionaryView.swift */,
@@ -276,10 +297,15 @@
 				403DEF05BE6CDDD9D792F48E /* FaithfulTextFormatter.swift */,
 				296D0CAEBFAB507176B3120D /* KeyboardBridgeServer.swift */,
 				74BF38A2C1A016749A3294DE /* LocalTextProcessor.swift */,
+				09CE63425B407FAFC444E689 /* NotionHTTPTransport.swift */,
+				867517F51A01BB0C6986170E /* NotionImportFlow.swift */,
+				2496352F8EE70E66EEFD7535 /* NotionPrivatePreview.swift */,
+				B6F394203F0BBB4459C1FE88 /* NotionSourceMetadata.swift */,
 				016C65BF0148E33EA696E3A0 /* OrderedDeliveryCursor.swift */,
 				9165CD4DBE8B8C26C487D6EA /* PlaceNameDictionary.swift */,
 				3305F071C6EEA40A03F26942 /* PolishMode.swift */,
 				8A2338557B1E88199A69C546 /* PrivateMaterialPrototype.swift */,
+				D5BCFE1FAD8239171AF5C4FF /* ProtectedPrivateIndexStorage.swift */,
 				4BCEE758CC4BA2F9D6D92719 /* SpeechTranscribing.swift */,
 				EE4B3D0216960001F140BBC7 /* SpokenCorrection.swift */,
 				4C6FFBE459AAD43F9EBF3FC7 /* StyleProfile.swift */,
@@ -297,8 +323,10 @@
 			isa = PBXGroup;
 			children = (
 				5CE168628B543948A9B95960 /* Constants.swift */,
+				2F06B25CDB281F462E97C308 /* CorrectionReview.swift */,
 				0F889D99651360D99CBF82D6 /* DeleteRepeatController.swift */,
 				317BBECD25CF92A53F75A1E7 /* PlaceNameReview.swift */,
+				608FE64F279E3DE9528CBC8B /* PrivateReferenceIndex.swift */,
 				E49B23FAC15A8D8327F47DA1 /* ShiftState.swift */,
 				05CA494D2608B995536F4DB6 /* TranslationBridgeHandler.swift */,
 				1B0BF26D0F776C54856CBF4D /* TranslationContentGuard.swift */,
@@ -363,6 +391,7 @@
 				4D53B1A1E97DD612833A6032 /* KeyboardView.swift */,
 				D9A2555DDBE7BD1352107C0F /* KeyboardViewController.swift */,
 				B3CC6B076D89E1B6CDA7E7AC /* KeyboardViewModel.swift */,
+				7B0C111968957D36D42BFE70 /* PrivateReferenceSearchModel.swift */,
 				C8B03A04CCFE10218662018C /* TranslationPreviewView.swift */,
 				721FEF9779B81D1628AC3CE9 /* TranslationSpeakControl.swift */,
 				0E6009C79BB89DF9F686ED24 /* TranslationViewModel.swift */,
@@ -506,6 +535,8 @@
 				7EEBE20DBAF48FBF6DA10519 /* ClipboardHistoryView.swift in Sources */,
 				995F92AE4CC7EA40E788B875 /* Constants.swift in Sources */,
 				B8906B6D16BAFF900E2E6E63 /* ContentView.swift in Sources */,
+				56D325EF387FDB403B6F589A /* CorrectionReview.swift in Sources */,
+				61861BF6C563203C75C1BBD8 /* CorrectionReviewView.swift in Sources */,
 				EA963925E64565DC6111860C /* DeleteRepeatController.swift in Sources */,
 				94AB0A8339683CECF02BDD06 /* DictationHistory.swift in Sources */,
 				D3AC56D1FE680C2B4D99D950 /* DictationHistoryView.swift in Sources */,
@@ -513,6 +544,10 @@
 				7113B7EC19A2CB864B69C60F /* KeyboardBridgeServer.swift in Sources */,
 				CABEF0C3D2034201AE11C2B6 /* KeyboardGuideView.swift in Sources */,
 				B177B7736D101F78A487C7D9 /* LocalTextProcessor.swift in Sources */,
+				711899FC1F7D28556BA12109 /* NotionHTTPTransport.swift in Sources */,
+				F614C6B9DE87F18B4E8D61AE /* NotionImportFlow.swift in Sources */,
+				789ACCBC65BCD8B4AAAF4E54 /* NotionPrivatePreview.swift in Sources */,
+				46D9E5F3495486D609179831 /* NotionSourceMetadata.swift in Sources */,
 				3E33EE046D9B191CF193BA0A /* OrderedDeliveryCursor.swift in Sources */,
 				154F289F8C1F5D7BA2600E24 /* PlaceNameDictionary.swift in Sources */,
 				7005EC738FE6FEC3F0DC4850 /* PlaceNameDictionaryView.swift in Sources */,
@@ -520,6 +555,8 @@
 				E827F23053F6B430DE892C3A /* PolishMode.swift in Sources */,
 				893507059E031AE77E3FB709 /* PrivateMaterialPrototype.swift in Sources */,
 				5AA75BA57D61B8593AF95693 /* PrivateMaterialPrototypeView.swift in Sources */,
+				5832D5FB5DABC4F66BA3EA8E /* PrivateReferenceIndex.swift in Sources */,
+				F1B4B5D27D7285500464EA78 /* ProtectedPrivateIndexStorage.swift in Sources */,
 				8249E7DF06A518EB4031B994 /* SettingsView.swift in Sources */,
 				9EDFF8DB65083E79ED20F37A /* ShiftState.swift in Sources */,
 				A86A1BAF9D1E69EBC0EBD7B8 /* SpeechTranscribing.swift in Sources */,
@@ -558,6 +595,7 @@
 				8F50F512636636250BAF958E /* ClipboardCapture.swift in Sources */,
 				44BF3AC8D20033839289DFF8 /* ClipboardHistory.swift in Sources */,
 				B560250E647407F0B6982062 /* Constants.swift in Sources */,
+				AEFDC3AEF555B51CBD34E753 /* CorrectionReview.swift in Sources */,
 				8E7E2AC8EFD3899B533B42D2 /* DeleteRepeatController.swift in Sources */,
 				E45D9008E3EBAD2787A466B2 /* KeyboardBridgeClient.swift in Sources */,
 				C3A5EB082D110F3399FDE926 /* KeyboardView.swift in Sources */,
@@ -565,6 +603,8 @@
 				AE396831AEECD305156EEA2E /* KeyboardViewModel.swift in Sources */,
 				608C7B2ECDC4E492E892FF82 /* PlaceNameReview.swift in Sources */,
 				AAB64C34CD2279B51C72505B /* PolishMode.swift in Sources */,
+				5B38441843162B55CE19D62C /* PrivateReferenceIndex.swift in Sources */,
+				AA1497F7635BF113A992350A /* PrivateReferenceSearchModel.swift in Sources */,
 				6C00DFA57AB6782489BB7467 /* ShiftState.swift in Sources */,
 				CAD34E6C1255DAEA33C141C4 /* TranslationBridgeHandler.swift in Sources */,
 				5D02669CDAF933DDCA45686D /* TranslationContentGuard.swift in Sources */,

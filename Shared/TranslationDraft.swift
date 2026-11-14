@@ -162,12 +162,14 @@ struct TranslationSpeakGesture: Equatable {
     static let upwardDistance: Double = 45
     static func selection(elapsed: TimeInterval, horizontal: Double, vertical: Double,
                           width: Double, targetCount: Int) -> Int? {
-        guard elapsed >= holdDuration, vertical <= -upwardDistance, width > 0, targetCount > 0,
+        guard elapsed.isFinite, horizontal.isFinite, vertical.isFinite, width.isFinite,
+              elapsed >= holdDuration, vertical <= -upwardDistance, width > 0, targetCount > 0,
               abs(horizontal) <= width / 2 else { return nil }
         return min(targetCount - 1, max(0, Int((horizontal + width / 2) / (width / Double(targetCount)))))
     }
     static func ended(elapsed: TimeInterval, horizontal: Double, vertical: Double,
                       width: Double, targetCount: Int, canTranslate: Bool) -> Action {
+        guard elapsed.isFinite, elapsed >= 0, horizontal.isFinite, vertical.isFinite, width.isFinite else { return .none }
         if elapsed < holdDuration, abs(horizontal) < 18, abs(vertical) < 18 { return .dictate }
         if canTranslate, let index = selection(elapsed: elapsed, horizontal: horizontal, vertical: vertical, width: width, targetCount: targetCount) {
             return .translate(index)

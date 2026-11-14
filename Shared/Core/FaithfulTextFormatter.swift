@@ -61,7 +61,19 @@ enum FaithfulTextFormatter {
     /// Strict mode accepts layout changes only: lexical order and every token survive.
     /// This is intentionally conservative; rejected provider output falls back locally.
     static func preservesContent(_ candidate: String, source: String) -> Bool {
-        signature(candidate) == signature(source)
+        signature(candidate) == signature(source) && numericLiterals(candidate) == numericLiterals(source)
+    }
+
+    /// Preserve numeric separators and signs exactly; a false rejection safely falls back.
+    private static func numericLiterals(_ text: String) -> [String] {
+        let regex = try! NSRegularExpression(pattern: #"[-+−]?\d+(?:[.,:/-]\d+)*(?:[%％])?"#)
+        return regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap {
+            Range($0.range, in: text).map { String(text[$0]) }
+        }
+    }
+
+    static func preservesNumbers(_ candidate: String, source: String) -> Bool {
+        numericLiterals(candidate) == numericLiterals(source)
     }
 
     private static func signature(_ text: String) -> String {
@@ -76,9 +88,13 @@ struct DictationTextPreparation: Sendable {
     let strictLayout: Bool
     let correctionNeedsConfirmation: Bool
     let literalContent: Bool
+    private let requiresNumericFidelity: Bool
+    private let isDictation: Bool
 
     init(_ text: String, mode: PolishMode) {
         original = text
+        isDictation = mode != .askLLM
+        requiresNumericFidelity = mode != .askLLM
         let correction = SpokenCorrection.process(text, mode: mode)
         body = FaithfulTextFormatter.format(correction.body, mode: mode)
         correctionNeedsConfirmation = correction.needsConfirmation
@@ -86,9 +102,19 @@ struct DictationTextPreparation: Sendable {
         strictLayout = mode != .askLLM && (text.count >= 120 || body != text || correction.needsConfirmation || mode == .coding || FaithfulTextFormatter.isProtected(text))
     }
 
+    private func hasUndictatedPreface(_ candidate: String) -> Bool {
+        // Only reject common response scaffolding at the beginning. The same
+        // words are allowed when the user actually dictated that prefix.
+        let pattern = #"^\s*(?:分析|思考|推理|说明|說明|解释|解釋|以下是(?:整理|修正|润色|潤色|纠正|糾正)后的(?:文本|内容|內容)|以下是(?:整理|修正|潤色|糾正)後的(?:文本|內容))\s*[:：]"#
+        return isDictation && candidate.range(of: pattern, options: .regularExpression) != nil
+            && body.range(of: pattern, options: .regularExpression) == nil
+    }
+
     func accept(_ candidate: String) -> Bool {
         !candidate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !hasUndictatedPreface(candidate)
             && (!literalContent || candidate == body)
+            && (!requiresNumericFidelity || FaithfulTextFormatter.preservesNumbers(candidate, source: body))
             && (!strictLayout || FaithfulTextFormatter.preservesContent(candidate, source: body))
     }
 }
