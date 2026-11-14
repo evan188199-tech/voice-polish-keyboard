@@ -285,7 +285,9 @@ final class VoiceSessionCoordinator: ObservableObject {
         guard state == .inactive || state == .error else { return }
         statusMessage = "正在启动..."
 
+        VoiceStageDiagnostics.record(.micRequested)
         let micOK = await MicrophonePermission.request()
+        VoiceStageDiagnostics.record(micOK ? .micGranted : .micDenied)
         lastErrorCode = nil
         guard micOK else {
             state = .error
@@ -294,9 +296,11 @@ final class VoiceSessionCoordinator: ObservableObject {
             return
         }
 
+        var startingAudio = false
         do {
             if let transcriber, await !transcriber.isReady {
                 if await !transcriber.hasModelFiles {
+                    VoiceStageDiagnostics.record(.modelMissing)
                     // Allow explicit download flow from UI; do not silently pull ~230MB here.
                     state = .error
                     statusMessage = "模型未就绪，请先下载"
@@ -304,18 +308,27 @@ final class VoiceSessionCoordinator: ObservableObject {
                     return
                 }
                 statusMessage = "加载模型..."
+                VoiceStageDiagnostics.record(.modelLoading)
                 try await transcriber.prepareModel()
             }
+            if let transcriber, await transcriber.isReady {
+                VoiceStageDiagnostics.record(.modelReady)
+            }
+            startingAudio = true
+            VoiceStageDiagnostics.record(.audioStarting)
             try await recorder.startSession()
+            VoiceStageDiagnostics.record(.audioReady)
             bindRecorderRouteCallbacks()
             currentInputName = recorder.currentInputName
             isInputReady = recorder.isInputReady
             bridgeServer = KeyboardBridgeServer(coordinator: self)
             await bridgeServer?.start()
+            VoiceStageDiagnostics.record(.bridgeStartRequested)
             state = .ready
             statusMessage = readyMessage()
             noteSessionActivity(reason: "activate")
         } catch {
+            VoiceStageDiagnostics.record(startingAudio ? .audioFailed : .modelFailed)
             state = .error
             if error is RecorderError || Self.isAudioRouteError(error) {
                 statusMessage = "启动失败: \(Self.friendlyMicrophoneMessage(for: error))"
@@ -435,6 +448,10 @@ final class VoiceSessionCoordinator: ObservableObject {
 
     // MARK: - Hold-to-record
 
+    func noteBridgeStartReceived() {
+        VoiceStageDiagnostics.record(.bridgeStartReceived)
+    }
+
     /// Begin a new capture. Returns true only when the session entered `.recording`.
     @discardableResult
     func startRecording() -> Bool {
@@ -472,6 +489,7 @@ final class VoiceSessionCoordinator: ObservableObject {
         lastErrorCode = nil
         noteSessionActivity(reason: "startRecording")
         recorder.beginRecording()
+        VoiceStageDiagnostics.record(.captureStarted)
 
         let maxDur = settings?.maxRecordingDuration ?? AppConstants.defaultMaxRecordingDuration
         audioTask?.cancel()
@@ -519,6 +537,7 @@ final class VoiceSessionCoordinator: ObservableObject {
 
         let recordingDurationMs = max(Int(recorder.elapsed * 1_000), 0)
         let data = recorder.finishRecording()
+        VoiceStageDiagnostics.record(data.isEmpty ? .captureEmpty : .captureNonempty)
         let jobID = UUID()
         let sequence = nextSequence
         nextSequence &+= 1
@@ -1127,10 +1146,12 @@ final class VoiceSessionCoordinator: ObservableObject {
         guard let job = jobs[jobID], !job.delivered else { return }
         guard job.generation == pipelineGeneration else { return }
         job.phase = .transcribing
+        VoiceStageDiagnostics.record(.inferenceStarted)
         PipelineDiagnostics.record(jobID: jobID, phase: .transcribing)
         refreshProcessingStatus()
 
         guard let transcriber else {
+            VoiceStageDiagnostics.record(.inferenceFailed)
             failJob(job, message: "模型未加载")
             return
         }
@@ -1140,6 +1161,7 @@ final class VoiceSessionCoordinator: ObservableObject {
         do {
             let started = ContinuousClock.now
             let raw = try await transcriber.transcribe(job.pcmData, vocabulary: job.snapshot.vocabulary)
+            VoiceStageDiagnostics.record(.inferenceSucceeded)
             guard job.generation == pipelineGeneration, jobs[jobID] != nil else { return }
             job.primaryLatencyMs = elapsedMilliseconds(since: started)
             PipelineDiagnostics.record(jobID: jobID, phase: .transcribing, elapsedMs: job.primaryLatencyMs)
@@ -1175,6 +1197,7 @@ final class VoiceSessionCoordinator: ObservableObject {
             if Task.isCancelled || job.generation != pipelineGeneration {
                 return
             }
+            VoiceStageDiagnostics.record(.inferenceFailed)
             // ASR failure skips this segment without blocking later delivery.
             failJob(job, message: error.localizedDescription)
         }

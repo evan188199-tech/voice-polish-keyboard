@@ -2,6 +2,17 @@ import XCTest
 @testable import VoicePolishApp
 
 final class VoicePipelineTests: XCTestCase {
+    func testVoiceStageDiagnosticsRemainBoundedAndContainOnlyFixedMarkers() {
+        let suite = "voice-stages-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        for _ in 0..<42 { VoiceStageDiagnostics.record(.micRequested, defaults: defaults) }
+        VoiceStageDiagnostics.record(.captureEmpty, defaults: defaults)
+        let stages = VoiceStageDiagnostics.load(defaults: defaults)
+        XCTAssertEqual(stages.count, 40)
+        XCTAssertEqual(stages.last, .captureEmpty)
+        XCTAssertTrue(stages.allSatisfy { $0 == .micRequested || $0 == .captureEmpty })
+    }
     func testSkippedFailuresRetainOrderAndCanBeConsumedOnce() {
         var queue = OrderedFailureIDs()
         let first = UUID(), second = UUID()

@@ -60,3 +60,28 @@ enum PipelineDiagnostics {
         return events
     }
 }
+
+/// Fixed, content-free breadcrumbs for diagnosing the local voice path.
+enum VoiceDiagnosticStage: String, CaseIterable {
+    case micRequested, micGranted, micDenied
+    case modelMissing, modelLoading, modelReady, modelFailed
+    case audioStarting, audioReady, audioFailed
+    case bridgeStartRequested, bridgeStartReceived
+    case captureStarted, captureEmpty, captureNonempty
+    case inferenceStarted, inferenceSucceeded, inferenceFailed
+}
+
+enum VoiceStageDiagnostics {
+    private static let key = "voice_stage_diagnostics_v1"
+    private static let limit = 40
+
+    static func record(_ stage: VoiceDiagnosticStage, defaults: UserDefaults = .standard) {
+        var stages = defaults.stringArray(forKey: key) ?? []
+        stages.append(stage.rawValue)
+        defaults.set(Array(stages.suffix(limit)), forKey: key)
+    }
+
+    static func load(defaults: UserDefaults = .standard) -> [VoiceDiagnosticStage] {
+        (defaults.stringArray(forKey: key) ?? []).compactMap(VoiceDiagnosticStage.init(rawValue:))
+    }
+}

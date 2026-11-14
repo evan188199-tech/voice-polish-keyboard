@@ -71,6 +71,7 @@ actor KeyboardBridgeServer {
                 over: connection
             )
         case .start:
+            await coordinator.noteBridgeStartReceived()
             let statusBefore = await coordinator.currentStatus
             if statusBefore.state == .inactive {
                 BridgeServer.send(
