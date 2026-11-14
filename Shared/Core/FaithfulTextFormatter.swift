@@ -61,7 +61,15 @@ enum FaithfulTextFormatter {
     /// Strict mode accepts layout changes only: lexical order and every token survive.
     /// This is intentionally conservative; rejected provider output falls back locally.
     static func preservesContent(_ candidate: String, source: String) -> Bool {
-        signature(candidate) == signature(source)
+        signature(candidate) == signature(source) && numericLiterals(candidate) == numericLiterals(source)
+    }
+
+    /// Preserve numeric separators and signs exactly; a false rejection safely falls back.
+    private static func numericLiterals(_ text: String) -> [String] {
+        let regex = try! NSRegularExpression(pattern: #"[-+−]?\d+(?:[.,:/-]\d+)*(?:[%％])?"#)
+        return regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap {
+            Range($0.range, in: text).map { String(text[$0]) }
+        }
     }
 
     private static func signature(_ text: String) -> String {

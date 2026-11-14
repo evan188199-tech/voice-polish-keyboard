@@ -45,6 +45,16 @@ final class FixtureURLProtocol: URLProtocol, @unchecked Sendable {
         check(!prepared.accept("只需联系供应商。"), "summary/omitted constraints rejected for protected layout")
         check(!prepared.accept(prepared.body.replacingOccurrences(of: "小明", with: "黄晓明")), "provider cannot alter protected list name")
         check(!prepared.accept(prepared.body.replacingOccurrences(of: "不要", with: "要")), "provider cannot drop negation")
+        for (original, altered) in [
+            ("温度-3.5度", "温度3.5度"),
+            ("报价3.5元", "报价35元"),
+            ("日期2026-03-05", "日期20260305"),
+            ("版本v2.1", "版本v21")
+        ] {
+            let source = String(repeating: "原条件必须完整保留。", count: 20) + original
+            let candidate = source.replacingOccurrences(of: original, with: altered)
+            check(!DictationTextPreparation(source, mode: .rewrite).accept(candidate), "strict formatting rejects numeric punctuation mutation")
+        }
         let hk = ChineseScriptConverter.convert(prepared.body, direction: .toTraditional)
         check(hk.contains("聯繫") && hk.contains("3000"), "Hong Kong script path preserves numeric content")
 
