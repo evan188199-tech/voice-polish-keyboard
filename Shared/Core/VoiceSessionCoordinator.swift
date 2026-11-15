@@ -616,6 +616,24 @@ final class VoiceSessionCoordinator: ObservableObject {
         return jobID
     }
 
+#if DEBUG
+    /// Simulator-only test seam; never used by the product UI.
+    func enqueueOfflineTestPCM(_ data: Data) -> UUID {
+        let snapshot = JobSnapshot(vocabulary: "", polishEnabled: false, polishMode: .rewrite,
+            baseURL: "", modelName: "", apiKey: "", chineseScript: .simplified,
+            compareWithSystemDictation: false, askHistory: [], styleSystemPrompt: nil)
+        let id = UUID()
+        let job = VoiceJob(id: id, sequence: nextSequence, pcmData: data, snapshot: snapshot,
+                           generation: pipelineGeneration, isTranslation: false, recordingDurationMs: 0)
+        nextSequence &+= 1
+        jobs[id] = job
+        jobOrder.append(id)
+        asrQueue.append(id)
+        kickASRWorker()
+        return id
+    }
+#endif
+
     /// Compatibility helper: enqueue then wait for that job's ordered result.
     @discardableResult
     func finishRecordingAndWait() async -> String? {

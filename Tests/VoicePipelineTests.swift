@@ -82,6 +82,42 @@ private actor InvalidModelTranscriber: SpeechTranscribing {
 }
 
 final class VoicePipelineTests: XCTestCase {
+    @MainActor func testSyntheticOfflineModelAndJobDelivery() async throws {
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let fixture = documents.appendingPathComponent("VoiceModelFixture", isDirectory: true)
+        let audio = fixture.appendingPathComponent("fixture.pcm")
+        guard FileManager.default.fileExists(atPath: audio.path),
+              FileManager.default.fileExists(atPath: fixture.appendingPathComponent("model.int8.onnx").path),
+              FileManager.default.fileExists(atPath: fixture.appendingPathComponent("tokens.txt").path) else {
+            throw XCTSkip("Synthetic offline fixture was not installed")
+        }
+        let transcriber = SenseVoiceTranscriber(modelDir: fixture)
+        let start = Date()
+        try await transcriber.prepareModel()
+        print("OFFLINE_SMOKE model_load_seconds=\(Date().timeIntervalSince(start))")
+        let suite = "synthetic-offline-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let coordinator = VoiceSessionCoordinator(transcriber: transcriber, polisher: FixturePolisher(),
+                                                  historyStore: DictationHistoryStore(defaults: defaults))
+        let id = coordinator.enqueueOfflineTestPCM(try Data(contentsOf: audio))
+        let inferenceStart = Date()
+        for _ in 0..<1000 {
+            let result = coordinator.takeBridgeOutcome(jobID: id)
+            switch result.outcome {
+            case .text(let text):
+                print("OFFLINE_SMOKE job_seconds=\(Date().timeIntervalSince(inferenceStart)) text=\(text)")
+                XCTAssertEqual(result.jobID, id)
+                XCTAssertFalse(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                XCTAssertNotEqual(coordinator.takeBridgeOutcome(jobID: id).outcome, .text(text))
+                return
+            case .failed(let error): XCTFail("Offline job failed: \(error)"); return
+            case .discarded: XCTFail("Offline job discarded"); return
+            case .pending, .none: try await Task.sleep(nanoseconds: 20_000_000)
+            }
+        }
+        XCTFail("Offline job timed out")
+    }
     @MainActor func testMicrophoneDenialStopsBeforeModelPreparation() async {
         let suite = "permission-denied-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
