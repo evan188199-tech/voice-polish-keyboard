@@ -39,13 +39,19 @@ final class VoiceSessionCoordinator: ObservableObject {
     @Published private(set) var compareLocaleIdentifier: String?
 
     private let recorder = AudioRecorder()
-    private var transcriber: SenseVoiceTranscriber?
+    private var transcriber: (any SpeechTranscribing)?
 #if os(iOS)
     private var appleTranscriber: AppleOnDeviceTranscriber?
 #endif
-    private let polisher: TextPolishing = APITextPolisher()
+    private let polisher: any TextPolishing
     let translationService = TranslationServiceRegistry()
-    private let historyStore = DictationHistoryStore.shared
+    private let historyStore: DictationHistoryStore
+    private let requestMicrophonePermission: @MainActor () async -> Bool
+    private var activationEpoch: UInt64 = 0
+    private var activationInProgress = false
+    private var modelPreparationTask: Task<Void, Error>?
+    private var modelRequestCount = 0
+    private var modelDeletionInProgress = false
     private var bridgeServer: KeyboardBridgeServer?
     private var settings: AppSettings?
     private var audioTask: Task<Void, Never>?
@@ -80,6 +86,15 @@ final class VoiceSessionCoordinator: ObservableObject {
     private var askConversation: [AskConversationTurn] = []
     private var askFollowUpArmed = false
     private let askHistoryLimit = 6
+
+    init(transcriber: (any SpeechTranscribing)? = nil, polisher: any TextPolishing = APITextPolisher(),
+         historyStore: DictationHistoryStore = .shared,
+         requestMicrophonePermission: @escaping @MainActor () async -> Bool = { await MicrophonePermission.request() }) {
+        self.transcriber = transcriber
+        self.polisher = polisher
+        self.historyStore = historyStore
+        self.requestMicrophonePermission = requestMicrophonePermission
+    }
 
     var askFollowUpAvailable: Bool {
         !askConversation.isEmpty
@@ -283,11 +298,22 @@ final class VoiceSessionCoordinator: ObservableObject {
     }
 
     func activate() async {
-        guard state == .inactive || state == .error else { return }
+        guard !activationInProgress, state == .inactive || state == .error else { return }
+        guard !modelDeletionInProgress else {
+            state = .error
+            statusMessage = TranscriberError.modelDeleting.localizedDescription
+            lastErrorCode = .modelNotReady
+            return
+        }
+        activationInProgress = true
+        activationEpoch &+= 1
+        let epoch = activationEpoch
+        defer { if activationEpoch == epoch { activationInProgress = false } }
         statusMessage = "正在启动..."
 
         VoiceStageDiagnostics.record(.micRequested)
-        let micOK = await MicrophonePermission.request()
+        let micOK = await requestMicrophonePermission()
+        guard activationEpoch == epoch else { return }
         VoiceStageDiagnostics.record(micOK ? .micGranted : .micDenied)
         lastErrorCode = nil
         guard micOK else {
@@ -300,7 +326,9 @@ final class VoiceSessionCoordinator: ObservableObject {
         var startingAudio = false
         do {
             if let transcriber, await !transcriber.isReady {
+                guard activationEpoch == epoch else { return }
                 if await !transcriber.hasModelFiles {
+                    guard activationEpoch == epoch else { return }
                     VoiceStageDiagnostics.record(.modelMissing)
                     // Allow explicit download flow from UI; do not silently pull ~230MB here.
                     state = .error
@@ -310,28 +338,38 @@ final class VoiceSessionCoordinator: ObservableObject {
                 }
                 statusMessage = "加载模型..."
                 VoiceStageDiagnostics.record(.modelLoading)
-                try await transcriber.prepareModel()
+                try await prepareModelOnce(transcriber)
+                guard activationEpoch == epoch else { return }
             }
+            guard activationEpoch == epoch else { return }
             if let transcriber, await transcriber.isReady {
                 VoiceStageDiagnostics.record(.modelReady)
             }
+            guard activationEpoch == epoch else { return }
             startingAudio = true
             VoiceStageDiagnostics.record(.audioStarting)
             try await recorder.startSession()
+            guard activationEpoch == epoch else { return }
             VoiceStageDiagnostics.record(.audioReady)
             bindRecorderRouteCallbacks()
             currentInputName = recorder.currentInputName
             isInputReady = recorder.isInputReady
-            bridgeServer = KeyboardBridgeServer(coordinator: self, translationService: translationService)
-            await bridgeServer?.start()
+            let startingServer = KeyboardBridgeServer(coordinator: self, translationService: translationService)
+            bridgeServer = startingServer
+            await startingServer.start()
+            guard activationEpoch == epoch else { await startingServer.stop(); return }
             VoiceStageDiagnostics.record(.bridgeStartRequested)
             state = .ready
             statusMessage = readyMessage()
             noteSessionActivity(reason: "activate")
         } catch {
+            guard activationEpoch == epoch else { return }
             VoiceStageDiagnostics.record(startingAudio ? .audioFailed : .modelFailed)
             state = .error
-            if error is RecorderError || Self.isAudioRouteError(error) {
+            if error is TranscriberError {
+                statusMessage = "启动失败: \(error.localizedDescription)"
+                lastErrorCode = .modelNotReady
+            } else if error is RecorderError || Self.isAudioRouteError(error) {
                 statusMessage = "启动失败: \(Self.friendlyMicrophoneMessage(for: error))"
                 lastErrorCode = .inputSessionInvalid
             } else {
@@ -344,6 +382,8 @@ final class VoiceSessionCoordinator: ObservableObject {
     }
 
     func deactivate(statusMessage overrideMessage: String? = nil) {
+        activationEpoch &+= 1
+        activationInProgress = false
         // Invalidate any in-flight capture so late callbacks cannot reopen the mic.
         captureEpoch &+= 1
         pipelineGeneration &+= 1
@@ -360,11 +400,9 @@ final class VoiceSessionCoordinator: ObservableObject {
         let server = bridgeServer
         bridgeServer = nil
 
-        Task {
-            recorder.cancelRecording()
-            recorder.stopSession()
-            await server?.stop()
-        }
+        recorder.cancelRecording()
+        recorder.stopSession()
+        Task { await server?.stop() }
 
         state = .inactive
         elapsedSeconds = nil
@@ -384,6 +422,9 @@ final class VoiceSessionCoordinator: ObservableObject {
 
     func downloadModel() async throws {
         guard let transcriber else { throw TranscriberError.notReady }
+        guard !modelDeletionInProgress else { throw TranscriberError.modelDeleting }
+        modelRequestCount += 1
+        defer { modelRequestCount -= 1 }
         let filesPresent = await transcriber.hasModelFiles
         modelFilesPresent = filesPresent
         preparePhase = filesPresent ? "loading" : "downloading"
@@ -409,7 +450,7 @@ final class VoiceSessionCoordinator: ObservableObject {
         }
 
         do {
-            try await transcriber.prepareModel()
+            try await prepareModelOnce(transcriber)
             progressTask.cancel()
             downloadProgress = 1
             preparePhase = nil
@@ -427,12 +468,25 @@ final class VoiceSessionCoordinator: ObservableObject {
 
     func deleteModel() async throws {
         guard state == .inactive || state == .error else { throw TranscriberError.modelInUse }
+        guard !modelDeletionInProgress else { throw TranscriberError.modelDeleting }
+        guard !activationInProgress, modelRequestCount == 0, modelPreparationTask == nil else { throw TranscriberError.modelPreparing }
         guard let transcriber else { throw TranscriberError.notReady }
+        modelDeletionInProgress = true
+        defer { modelDeletionInProgress = false }
         try await transcriber.removeModelFiles()
         modelFilesPresent = false
         downloadProgress = nil
         preparePhase = nil
+        if state == .error, lastErrorCode == .modelNotReady { state = .inactive; lastErrorCode = nil }
         statusMessage = "本地模型已删除"
+    }
+
+    private func prepareModelOnce(_ transcriber: any SpeechTranscribing) async throws {
+        if let task = modelPreparationTask { return try await task.value }
+        let task = Task { try await transcriber.prepareModel() }
+        modelPreparationTask = task
+        defer { modelPreparationTask = nil }
+        try await task.value
     }
 
     var isModelReady: Bool {

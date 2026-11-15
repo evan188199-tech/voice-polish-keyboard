@@ -776,6 +776,12 @@ public class SherpaOnnxOfflineRecognizer {
     self.recognizer = ptr
   }
 
+  /// Allows callers to report a model initialization failure without terminating the app.
+  public init?(validating config: UnsafePointer<SherpaOnnxOfflineRecognizerConfig>) {
+    guard let ptr = SherpaOnnxCreateOfflineRecognizer(config) else { return nil }
+    self.recognizer = ptr
+  }
+
   deinit {
     SherpaOnnxDestroyOfflineRecognizer(recognizer)
   }
