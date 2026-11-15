@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 /// One captured clipboard item.
 ///
@@ -100,6 +101,9 @@ final class ClipboardMirrorStore: ObservableObject, @unchecked Sendable {
     private let lock = NSLock()
 
     @Published private(set) var entries: [ClipboardEntry] = []
+    // Published UI updates are asynchronous; this locked copy is authoritative
+    // for persistence and for subsequent bridge operations.
+    private var storedEntries: [ClipboardEntry] = []
     private var hiddenIDs: Set<String> = []
 
     init(defaults: UserDefaults = .standard) {
@@ -122,6 +126,7 @@ final class ClipboardMirrorStore: ObservableObject, @unchecked Sendable {
             hiddenIDs = []
         }
         entries = entries.filter { !hiddenIDs.contains($0.id) }
+        storedEntries = entries
         persistLocked()
     }
 
@@ -133,20 +138,22 @@ final class ClipboardMirrorStore: ObservableObject, @unchecked Sendable {
         defer { lock.unlock() }
         let visible = incoming.filter { !hiddenIDs.contains($0.id) }
         let capped = Array(visible.prefix(ClipboardHistoryPolicy.maxEntries))
-        let result = capped
+        storedEntries = capped
         DispatchQueue.main.async { [weak self] in
             self?.entries = capped
         }
         persistLocked()
-        return result
+        return capped
     }
 
     func hide(id: String) {
         lock.lock()
         defer { lock.unlock() }
         hiddenIDs.insert(id)
+        storedEntries.removeAll { $0.id == id }
+        let snapshot = storedEntries
         DispatchQueue.main.async { [weak self] in
-            self?.entries.removeAll { $0.id == id }
+            self?.entries = snapshot
         }
         persistLocked()
     }
@@ -154,7 +161,8 @@ final class ClipboardMirrorStore: ObservableObject, @unchecked Sendable {
     func clear() {
         lock.lock()
         defer { lock.unlock() }
-        for entry in entries { hiddenIDs.insert(entry.id) }
+        for entry in storedEntries { hiddenIDs.insert(entry.id) }
+        storedEntries = []
         DispatchQueue.main.async { [weak self] in
             self?.entries = []
         }
@@ -162,7 +170,7 @@ final class ClipboardMirrorStore: ObservableObject, @unchecked Sendable {
     }
 
     private func persistLocked() {
-        if let data = try? JSONEncoder().encode(entries) {
+        if let data = try? JSONEncoder().encode(storedEntries) {
             defaults.set(data, forKey: entriesKey)
         }
         defaults.set(Array(hiddenIDs), forKey: hiddenIDsKey)

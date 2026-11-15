@@ -3,17 +3,16 @@ import UIKit
 
 struct KeyboardView: View {
     @ObservedObject var model: KeyboardViewModel
+    @ObservedObject var translation: TranslationViewModel
     let onInsert: (String) -> Void
     let onDelete: () -> Void
     let onReturn: () -> Void
     let onActivateSession: () -> Void
+    let onNextKeyboard: () -> Void
 
     @State private var page: KeyboardPage = .voice
-    @State private var dragX: CGFloat = 0
-    @State private var pressed = false
-
-    private let cancelThreshold: CGFloat = -60
-
+    @State private var translationTracking = false
+    @State private var showAskEditHint = false
     @State private var shiftState: ShiftState = .off
     @State private var lastShiftTapAt: Date?
     private let shiftController = ShiftStateController()
@@ -62,6 +61,12 @@ struct KeyboardView: View {
         .frame(maxWidth: .infinity)
         .frame(height: KeyboardLayout.contentHeight)
         .background(Color(uiColor: .systemGroupedBackground))
+        .simultaneousGesture(pageSwipe, including: model.canSwitchPage && !translationTracking && model.askReview == nil ? .all : .none)
+        .onChange(of: model.appearance) { _, _ in page = .voice }
+        .onChange(of: model.askReview?.jobID) { _, id in
+            showAskEditHint = false
+            if id != nil { page = .voice }
+        }
         .onChange(of: model.isRecording) { _, isRecording in
             // Keep the user on the voice page while a hold-to-record gesture is active.
             if isRecording {
@@ -79,370 +84,237 @@ struct KeyboardView: View {
     // MARK: - Voice page
 
     private var voiceContent: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: 0) {
             voiceToolbar
-            ZStack(alignment: .bottomTrailing) {
-                holdZone
-                continuousDeleteButton
-                    .frame(width: Self.deleteKeyWidth, height: Self.deleteKeyHeight)
-                    .disabled(!model.isConnected || model.isRecording)
-                    .opacity(model.isRecording ? 0.35 : 1)
+            Spacer(minLength: 4)
+            if let review = model.askReview, model.canSwitchPage {
+                askReviewContent(review)
+            } else if translation.showPreview && model.canSwitchPage {
+                TranslationPreviewView(model: translation, onEditSource: { translation.isEditingSource = true; page = .abc },
+                    onPasteSource: { if let value = UIPasteboard.general.string { translation.appendSource(value) } },
+                    onClose: { translation.showPreview = false; translation.isEditingSource = false })
+            } else if let review = model.placeReview, model.canSwitchPage {
+                placeReviewContent(review)
+            } else {
+            HStack(spacing: 20) {
+                // Balanced space keeps the microphone centered when Cancel appears.
+                Color.clear.frame(width: 48, height: 44)
+                VStack(spacing: 7) {
+                    microphoneButton
+                    if model.heldResult != nil && model.canSwitchPage {
+                        Button("插入保留结果") { model.insertHeldResult() }
+                            .font(.caption.weight(.semibold))
+                            .frame(minHeight: 44)
+                            .accessibilityIdentifier("voice.insertHeldResult")
+                            .accessibilityHint("插入到当前输入框；请先确认输入位置")
+                    } else {
+                        Text(microphoneHint)
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.center)
+                            .accessibilityIdentifier("voice.captureHint")
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                Button {
+                    Task { await model.cancelRecording() }
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.body.weight(.semibold))
+                        .frame(width: 48, height: 48)
+                        .background(Color(uiColor: .secondarySystemFill), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .opacity(model.isRecording ? 1 : 0)
+                .disabled(!model.isRecording)
+                .accessibilityLabel("取消本段录音，保留已提交队列")
+                .accessibilityHidden(!model.isRecording)
             }
+            }
+            Spacer(minLength: 4)
+            HStack(spacing: 5) {
+                if let queue = model.queueText {
+                    if model.isProcessing { ProgressView().controlSize(.mini) }
+                    Text(queue)
+                } else {
+                    Text("左右滑动可打字修正")
+                }
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .frame(height: 22)
+            .accessibilityIdentifier("voice.queueStatus")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func askReviewContent(_ review: AskReview) -> some View {
+        VStack(spacing: 4) {
+            Text("请核对识别文字").font(.caption.weight(.semibold))
+            ScrollView {
+                Text(review.text).font(.body).frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("ask.reviewText")
+            }
+            HStack(spacing: 12) {
+                Button("在主应用修改") {
+                    showAskEditHint = true
+                    model.editAskReview()
+                }
+                    .frame(minWidth: 44, minHeight: 44)
+                    .accessibilityIdentifier("ask.edit")
+                Button("取消") { Task { await model.resolveAskReview(confirm: false) } }
+                    .frame(minWidth: 44, minHeight: 44)
+                    .accessibilityIdentifier("ask.cancel")
+                Button("确认提问") { Task { await model.resolveAskReview(confirm: true) } }
+                    .fontWeight(.semibold)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .accessibilityIdentifier("ask.confirm")
+            }
+            .font(.caption)
+            .frame(minHeight: 44)
+            .disabled(model.askReviewSubmitting)
+            if showAskEditHint {
+                Text("未打开？请切到主应用，点“核对待发送的提问”。")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func placeReviewContent(_ review: PlaceReviewDraft) -> some View {
+        VStack(spacing: 3) {
+            ScrollView {
+                Text(review.text).font(.caption).frame(maxWidth: .infinity, alignment: .leading)
+                ForEach(review.visibleSuggestions) { suggestion in
+                    HStack {
+                        Button("\(suggestion.original) → \(suggestion.replacement) \(suggestion.region)") {
+                            model.confirmPlace(suggestion.id)
+                        }.frame(minHeight: 44)
+                        Button("拒绝") { model.rejectPlace(suggestion.id) }.frame(minHeight: 44)
+                    }
+                }
+            }
+            HStack {
+                Button("撤销") { model.undoPlace() }.disabled(!review.canUndo)
+                Button("暂不插入") { model.retainPlaceDraftWithoutInsertion() }
+                Button("插入草稿") { model.insertPlaceDraft() }.fontWeight(.semibold)
+            }.font(.caption).frame(minHeight: 44)
+        }
     }
 
     private var voiceToolbar: some View {
-        HStack(spacing: 4) {
-            voiceStatusRow
-                .frame(maxWidth: .infinity)
-            modeChips
-                .frame(width: 180, height: 32)
-        }
-        .frame(height: 32)
-    }
-
-    private var voiceStatusRow: some View {
-        HStack(spacing: 4) {
-            HStack(spacing: 4) {
-                Circle()
-                    .fill(statusColor)
-                    .frame(width: 7, height: 7)
-                Text(model.statusText)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
+        HStack(spacing: 0) {
+            HStack(spacing: 5) {
+                Circle().fill(statusColor).frame(width: 6, height: 6)
+                Text(model.isRecording ? formatTime(model.elapsedTime) : readinessLabel)
+                    .font(.caption.weight(.medium).monospacedDigit())
                     .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                if model.isRecording {
-                    Text(formatTime(model.elapsedTime))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-                if !model.polishEnabled {
-                    Text("润色关")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.tertiary)
-                        .fixedSize()
-                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .layoutPriority(-1)
+            .accessibilityLabel(model.statusText)
 
-            Button {
-                Task { await model.toggleChineseScript() }
-            } label: {
-                Text(model.chineseScript.shortLabel)
-                    .font(.caption2.weight(.semibold))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(Color.orange.opacity(0.15))
-                    )
-                    .foregroundStyle(Color.orange)
-            }
-            .buttonStyle(.plain)
-            .disabled(!model.isConnected || model.isRecording)
-            .opacity((!model.isConnected || model.isRecording) ? 0.45 : 1)
-            .accessibilityLabel("中文脚本：\(model.chineseScript.shortLabel)")
-            if !model.isConnected {
-                Button {
-                    onActivateSession()
-                } label: {
-                    Label {
-                        Text("启动会话")
-                    } icon: {
-                        Image(systemName: "mic.badge.plus")
-                    }
-                    .labelStyle(.iconOnly)
-                    .frame(width: 24, height: 22)
-                }
-                .font(.caption.weight(.semibold))
-                .buttonStyle(.borderedProminent)
-                .controlSize(.mini)
-                .accessibilityLabel("启动会话")
-            }
-            secondaryActions
-        }
-        .frame(height: 32)
-    }
-
-    private var secondaryActions: some View {
-        ViewThatFits(in: .horizontal) {
-            directSecondaryActions
-            compactSecondaryActions
-        }
-    }
-
-    @ViewBuilder
-    private var directSecondaryActions: some View {
-        if let text = model.lastDeliveredText, !text.isEmpty, !model.isRecording {
-            Button {
-                onInsert(text)
-                model.copyLastDeliveredText()
-            } label: {
-                Image(systemName: "arrow.uturn.backward")
-                    .frame(width: 22, height: 22)
-            }
-            .font(.caption.weight(.semibold))
-            .buttonStyle(.bordered)
-            .controlSize(.mini)
-            .accessibilityLabel("重新插入最近结果，并复制到剪切板")
-        }
-        if model.canRetry {
-            Button {
-                Task { await model.retryTranscription() }
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .frame(width: 22, height: 22)
-            }
-            .font(.caption.weight(.semibold))
-            .buttonStyle(.bordered)
-            .controlSize(.mini)
-            .accessibilityLabel("重试")
-        }
-        if model.polishEnabled,
-           model.polishMode == .askLLM,
-           model.askFollowUpAvailable,
-           !model.isRecording {
-            Button {
-                Task { await model.armAskFollowUp() }
-            } label: {
-                Image(systemName: model.askFollowUpArmed ? "hourglass" : "arrowshape.turn.up.left")
-                    .frame(width: 22, height: 22)
-            }
-            .font(.caption.weight(.semibold))
-            .buttonStyle(.bordered)
-            .controlSize(.mini)
-            .disabled(!model.isConnected || model.askFollowUpArmed)
-            .accessibilityLabel(model.askFollowUpArmed ? "追问中" : "追问")
-            if model.askFollowUpAvailable {
-                Button {
-                    Task { await model.clearAskConversation() }
-                } label: {
-                    Image(systemName: "plus.bubble")
-                        .frame(width: 22, height: 22)
-                }
-                .font(.caption.weight(.semibold))
-                .buttonStyle(.bordered)
-                .controlSize(.mini)
-                .disabled(!model.isConnected || model.isRecording)
-                .accessibilityLabel("新问答")
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var compactSecondaryActions: some View {
-        if model.canRetry || hasAskActions {
             Menu {
-                secondaryMenuItems
+                Text("离线自动识别：粤语 / 中文 / English")
+                Button("香港繁体") { Task { await model.setChineseScript(.traditionalHK) } }
+                Button("简体中文") { Task { await model.setChineseScript(.simplified) } }
+            } label: {
+                Text("粤英 · \(model.chineseScript.shortLabel)")
+                    .font(.caption.weight(.semibold))
+                    .frame(minWidth: 74, minHeight: 44)
+            }
+            .disabled(!model.isConnected || !model.canSwitchPage)
+            .accessibilityLabel("识别语言和中文输出字体")
+
+            Menu {
+                ForEach(PolishMode.gridOrder, id: \.self) { mode in
+                    Button {
+                        Task { await model.selectPolishMode(mode) }
+                    } label: {
+                        Label(mode.displayName, systemImage: model.polishEnabled && model.polishMode == mode ? "checkmark" : mode.symbolName)
+                    }
+                }
+                Button(model.polishEnabled ? "关闭润色" : "开启润色") {
+                    Task { await model.togglePolishEnabled() }
+                }
+                Text("问答仅在明确选择该模式时执行")
+            } label: {
+                Text(model.polishEnabled ? model.polishMode.shortLabel : "原文")
+                    .font(.caption.weight(.semibold))
+                    .frame(minWidth: 44, minHeight: 44)
+            }
+            .disabled(!model.isConnected || !model.canSwitchPage)
+            .accessibilityLabel("处理模式：\(model.polishEnabled ? model.polishMode.displayName : "原文")")
+
+            Menu {
+                if model.heldResult != nil {
+                    Button("将保留结果插入当前输入框") { model.insertHeldResult() }
+                    Button("跳过保留结果（历史中可查看）") { model.discardHeldResult() }
+                } else if let text = model.lastDeliveredText, !text.isEmpty {
+                    Button("插入最近结果（可能重复）") { onInsert(text) }
+                    Button("复制最近结果") { model.copyLastDeliveredText() }
+                }
+                if model.canRetry {
+                    Button("重新连接，不重交录音") { Task { await model.retryTranscription() } }
+                }
+                if model.askFollowUpAvailable {
+                    Button(model.askFollowUpArmed ? "已准备追问" : "追问") {
+                        Task { await model.armAskFollowUp() }
+                    }.disabled(model.askFollowUpArmed)
+                    Button("新问答") { Task { await model.clearAskConversation() } }
+                }
+                Button("翻译与原文恢复") { translation.showPreview = true }
+                Button("打开主应用") { onActivateSession() }
             } label: {
                 Image(systemName: "ellipsis")
-                    .font(.caption.weight(.semibold))
-                    .frame(width: 24, height: 22)
-                    .background(
-                        Capsule()
-                            .fill(Color.secondary.opacity(0.14))
-                    )
-                    .foregroundStyle(Color.primary.opacity(0.75))
+                    .frame(width: 44, height: 44)
             }
-            .menuIndicator(.hidden)
-            .accessibilityLabel("更多操作")
+            .disabled(!model.canSwitchPage)
+            .accessibilityLabel("更多操作与结果恢复")
         }
+        .foregroundStyle(.primary)
+        .frame(minHeight: 44)
     }
 
-    @ViewBuilder
-    private var secondaryMenuItems: some View {
-        if model.canRetry {
-            Button("重试") {
-                Task { await model.retryTranscription() }
-            }
-        }
-        if hasAskActions {
-            Button(model.askFollowUpArmed ? "追问中" : "追问") {
-                Task { await model.armAskFollowUp() }
-            }
-            .disabled(!model.isConnected || model.askFollowUpArmed)
-            Button("新问答") {
-                Task { await model.clearAskConversation() }
-            }
-            .disabled(!model.isConnected || model.isRecording)
-        }
+    private var microphoneButton: some View {
+        TranslationSpeakControl(targets: translation.capability.orderedTargets,
+            canTranslate: translation.capability.isAvailable && model.isConnected && !model.needsActivation,
+            isRecording: model.isRecording, isBusy: model.capture.isTransitioning || model.isConnecting,
+            needsActivation: model.needsActivation, showTranslationMenu: model.heldResult == nil,
+            onTap: {
+                if model.needsActivation || !model.isConnected { onActivateSession() }
+                else { Task { await model.toggleRecording() } }
+            },
+            onTranslate: { target in model.startTranslation(target, translation: translation) },
+            onTracking: { translationTracking = $0 })
+            .accessibilityIdentifier("voice.microphone")
     }
 
-    private var hasAskActions: Bool {
-        model.polishEnabled
-            && model.polishMode == .askLLM
-            && model.askFollowUpAvailable
-            && !model.isRecording
+    private var readinessLabel: String {
+        if model.isConnecting { return "连接中" }
+        if model.needsActivation { return "待激活" }
+        if model.capture.isTransitioning { return "请稍候" }
+        return "语音就绪"
     }
 
-    // MARK: - Hold-to-talk (BiBi-like hold / swipe)
-
-    private var holdZone: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(holdFill)
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(
-                    model.isRecording ? Color.red.opacity(0.35) : Color.primary.opacity(0.05),
-                    lineWidth: 1
-                )
-
-            HStack {
-                Text("← 取消")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(dragX < cancelThreshold / 2 ? Color.red : Color.secondary)
-                    .frame(width: 48, alignment: .leading)
-                    .opacity(model.isRecording ? 1 : 0)
-                Spacer(minLength: 0)
-            }
-            .padding(.leading, 12)
-
-            VStack(spacing: 7) {
-                HStack(spacing: 8) {
-                    ZStack {
-                        Circle()
-                            .fill(holdIconFill)
-                            .frame(width: 34, height: 34)
-                        Image(systemName: model.isProcessing ? "waveform" : "mic.fill")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.white)
-                    }
-                    .offset(x: model.isRecording ? min(0, dragX) * 0.12 : 0)
-
-                    Text(holdLabel)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(model.isRecording ? Color.primary : Color.secondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-
-                    if model.isProcessing && !model.isRecording {
-                        ProgressView()
-                            .controlSize(.small)
-                    }
-                }
-
-                if model.isRecording {
-                    HStack(spacing: 3) {
-                        ForEach(0..<20, id: \.self) { index in
-                            Capsule()
-                                .fill(Color.red.opacity(0.8))
-                                .frame(width: 3, height: barHeight(index))
-                        }
-                    }
-                    .frame(height: 24)
-                    .animation(.easeInOut(duration: 0.12), value: model.elapsedTime)
-                }
-            }
-            .padding(.horizontal, 56)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .gesture(micGesture)
-        .opacity(!model.isConnected && !model.isRecording ? 0.55 : 1)
-        .animation(.easeInOut(duration: 0.15), value: model.isRecording)
-        .accessibilityLabel(model.isRecording ? "正在录音" : "按住说话")
-        .accessibilityHint(model.isRecording ? "左滑取消，松手识别" : "按住开始说话")
+    private var microphoneHint: String {
+        if model.capture.isTransitioning || model.canRetry { return model.statusText }
+        if model.isRecording { return "再次点击完成" }
+        if model.needsActivation { return "打开主应用准备录音" }
+        return "点击说话"
     }
 
-    private var micGesture: some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { value in
-                if !pressed && !model.isRecording {
-                    pressed = true
-                    model.noteHoldBegan()
-                    Task { await model.onPressDown() }
-                }
-                if pressed || model.isRecording {
-                    dragX = value.translation.width
-                }
-            }
+    private var pageSwipe: some Gesture {
+        DragGesture(minimumDistance: 24)
             .onEnded { value in
-                let wasPressed = pressed
-                pressed = false
-                dragX = 0
-                guard wasPressed else { return }
-                if value.translation.width < cancelThreshold {
-                    Task { await model.onSwipeCancel() }
-                } else {
-                    Task {
-                        if let text = await model.onPressUp(), !text.isEmpty {
-                            onInsert(text)
-                        }
-                    }
+                guard !translationTracking, VoiceKeyboardSwipe.shouldSwitch(
+                    horizontal: Double(value.translation.width), vertical: Double(value.translation.height),
+                    capture: model.capture
+                ) else { return }
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    page = page == .voice ? .abc : .voice
                 }
             }
-    }
-
-    private var holdLabel: String {
-        if model.isRecording { return "松手识别" }
-        if model.isProcessing { return "处理中…" }
-        return "按住说话"
-    }
-
-    private var holdFill: Color {
-        if model.isRecording { return Color.red.opacity(0.16) }
-        if model.isProcessing { return Color.blue.opacity(0.10) }
-        return Color(uiColor: .secondarySystemFill).opacity(model.isConnected ? 0.68 : 0.45)
-    }
-
-    private var holdIconFill: Color {
-        if model.isProcessing && !model.isRecording { return .blue }
-        if model.isRecording { return .red }
-        if model.isConnected { return .accentColor }
-        return .gray
-    }
-
-    private func barHeight(_ index: Int) -> CGFloat {
-        let phase = abs(sin(model.elapsedTime * 8 + Double(index)))
-        return 6 + CGFloat(phase) * 20
-    }
-
-    // MARK: - Mode chips
-
-    private var modeChips: some View {
-        return HStack(spacing: 4) {
-            ForEach(PolishMode.gridOrder, id: \.self) { mode in
-                modeCell(mode)
-            }
-        }
-        .disabled(!model.isConnected || model.isRecording)
-        .opacity((!model.isConnected || model.isRecording) ? 0.45 : 1)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("处理模式")
-    }
-
-    private func modeCell(_ mode: PolishMode) -> some View {
-        let selected = model.polishEnabled && model.polishMode == mode
-        return Button {
-            Task { await model.selectPolishMode(mode) }
-        } label: {
-            HStack(spacing: 3) {
-                Image(systemName: mode.symbolName)
-                    .font(.system(size: 11, weight: .semibold))
-                Text(mode.shortLabel)
-                    .font(.caption2.weight(.semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.horizontal, 6)
-            .background(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(selected ? Color.orange.opacity(0.20) : Color.primary.opacity(0.06))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .strokeBorder(selected ? Color.orange.opacity(0.70) : Color.clear, lineWidth: 1.2)
-            )
-            .foregroundStyle(selected ? Color.orange : Color.primary.opacity(0.75))
-        }
-        .buttonStyle(KeyboardPressButtonStyle())
-        .accessibilityLabel(mode.displayName)
-        .accessibilityAddTraits(selected ? .isSelected : [])
-        .accessibilityHint(selected ? "再次点击关闭润色" : "选择此模式")
     }
 
     // MARK: - ABC (QWERTY) page
@@ -605,20 +477,29 @@ struct KeyboardView: View {
 
     private var editingRow: some View {
         HStack(spacing: 6) {
-            pageToggleButtons
-                .frame(width: 144)
-
-            characterKey("空格", accessibilityLabel: "空格", style: .space) {
-                requestInsertion(" ")
+            Button(action: onNextKeyboard) {
+                Image(systemName: "globe").font(.title3)
+                    .frame(width: 44, height: 44)
             }
-            .frame(maxWidth: .infinity)
-
-            characterKey("换行", accessibilityLabel: "换行", style: .returnKey) {
-                requestAction(onReturn)
+            .buttonStyle(.plain)
+            .accessibilityLabel("下一个系统键盘")
+            if page == .voice {
+                pageButton(.abc, label: "ABC", voiceLabel: "英文键盘", icon: nil)
+                    .frame(width: 52)
+                Spacer(minLength: 0)
+                continuousDeleteButton.frame(width: 52, height: 44)
+            } else {
+                pageToggleButtons.frame(width: 132)
+                characterKey("空格", accessibilityLabel: "空格", style: .space) {
+                    requestInsertion(" ")
+                }
+            }
+            characterKey("回车", accessibilityLabel: "回车，遵循当前应用行为", style: .returnKey) {
+                if translation.isEditingSource { requestInsertion("\n") } else { requestAction(onReturn) }
             }
             .frame(width: 64)
         }
-        .frame(height: 40)
+        .frame(height: 44)
     }
 
     private var pageToggleButtons: some View {
@@ -630,7 +511,7 @@ struct KeyboardView: View {
     }
 
     private func pageButton(_ target: KeyboardPage, label: String?, voiceLabel: String, icon: String?) -> some View {
-        let canSwitch = !model.isRecording
+        let canSwitch = model.canSwitchPage
         let isSelected = page == target
         return Button {
             guard canSwitch else { return }
@@ -645,7 +526,7 @@ struct KeyboardView: View {
                     Text(label).font(.subheadline.weight(.semibold).monospacedDigit())
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: 40)
+            .frame(maxWidth: .infinity, minHeight: 44)
             .foregroundStyle(Color.primary)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -660,7 +541,7 @@ struct KeyboardView: View {
     }
 
     private var continuousDeleteButton: some View {
-        ContinuousDeleteKey { requestAction(onDelete) }
+        ContinuousDeleteKey { if translation.isEditingSource { translation.deleteSourceBackward() } else { requestAction(onDelete) } }
     }
 
     // MARK: - Shared key chrome
@@ -698,7 +579,7 @@ struct KeyboardView: View {
     }
 
     private func requestInsertion(_ text: String) {
-        requestAction { onInsert(text) }
+        if translation.isEditingSource { translation.appendSource(text) } else { requestAction { onInsert(text) } }
     }
 
     private func requestAction(_ action: @escaping () -> Void) {
@@ -781,7 +662,7 @@ struct KeyboardView: View {
             }
             .padding(.vertical, 5)
             .padding(.horizontal, 12)
-            .frame(minHeight: 40)
+            .frame(minHeight: 44)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(Color(uiColor: .secondarySystemGroupedBackground))
@@ -833,8 +714,8 @@ enum KeyboardPage {
 }
 
 enum KeyboardLayout {
-    /// The extension-owned content height. iOS supplies the separate globe/microphone bar.
-    static let contentHeight: CGFloat = 250
+    /// The extension-owned content height, including its own public next-keyboard button.
+    static let contentHeight: CGFloat = 280
 }
 
 private enum KeyVisualStyle {
@@ -849,7 +730,7 @@ private enum KeyVisualStyle {
         switch self {
         case .number: 37
         case .symbol: 32
-        case .space, .returnKey: 40
+        case .space, .returnKey: 44
         case .letter, .special: 44
         }
     }
@@ -914,7 +795,7 @@ private struct ContinuousDeleteKey: View {
         ZStack {
             Image(systemName: "delete.backward")
                 .font(.body.weight(.medium))
-                .frame(maxWidth: .infinity, minHeight: 40)
+                .frame(maxWidth: .infinity, minHeight: 44)
                 .foregroundStyle(Color.primary)
                 .background(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)

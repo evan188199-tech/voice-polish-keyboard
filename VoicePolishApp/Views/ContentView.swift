@@ -11,6 +11,7 @@ struct ContentView: View {
     @State private var showHistory = false
     @State private var modelReady = false
     @State private var activating = false
+    @State private var modelActionError: String?
 
     var body: some View {
         NavigationStack {
@@ -18,6 +19,10 @@ struct ContentView: View {
                 VStack(spacing: 16) {
                     onboarding
                     statusCard
+                    if coordinator.askReview != nil {
+                        Button("核对待发送的提问") { coordinator.askEditorRequested = true }
+                            .accessibilityIdentifier("ask.openEditor")
+                    }
                     usageStats
                     actionButtons
                     if coordinator.lastTranscription != nil
@@ -59,6 +64,9 @@ struct ContentView: View {
             .sheet(isPresented: $showHistory) {
                 DictationHistoryView(store: DictationHistoryStore.shared)
             }
+            .sheet(isPresented: $coordinator.askEditorRequested) {
+                AskReviewEditorView(coordinator: coordinator)
+            }
             .task {
                 await coordinator.refreshModelPresence()
                 modelReady = await coordinator.isModelReady
@@ -79,7 +87,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 12) {
             Label("欢迎使用粤英语音键盘", systemImage: "waveform")
                 .font(.title2.bold())
-            Text("借鉴「说点啥」：按住说话、松开发送、左滑取消。本机 SenseVoice 识别，可选 API 润色。")
+            Text("点击开始说话，再次点击完成；左右滑动切换文字键盘。本机 SenseVoice 识别，可选 API 润色。")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
@@ -98,15 +106,19 @@ struct ContentView: View {
                         Text("下载中 \(Int(progress * 100))%")
                     }
                 } else if coordinator.modelFilesPresent {
-                    Button("加载本地模型") {
-                        Task {
-                            do {
-                                try await coordinator.downloadModel()
-                                modelReady = await coordinator.isModelReady
-                            } catch {}
+                    VStack(alignment: .leading, spacing: 8) {
+                        Button("加载本地模型") {
+                            Task {
+                                do {
+                                    try await coordinator.downloadModel()
+                                    modelReady = await coordinator.isModelReady
+                                } catch {}
+                            }
                         }
+                        .buttonStyle(.borderedProminent)
+                        Button("删除本地模型", role: .destructive) { deleteLocalModel() }
+                            .font(.caption)
                     }
-                    .buttonStyle(.borderedProminent)
                 } else {
                     VStack(alignment: .leading, spacing: 8) {
                         Button("下载模型 (约 230 MB)") {
@@ -118,7 +130,7 @@ struct ContentView: View {
                             }
                         }
                         .buttonStyle(.borderedProminent)
-                        Text("手机直连 Hugging Face 可能很慢或卡在 0%。也可使用 scripts/seed_model_to_device.sh 从开发机预置模型。")
+                        Text("模型下载可能需要一些时间。请保持网络连接；如果下载失败，请检查网络后重试。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -130,17 +142,29 @@ struct ContentView: View {
                         .font(.subheadline)
                     Spacer()
                     Button("删除模型", role: .destructive) {
-                        Task {
-                            try? await coordinator.deleteModel()
-                            modelReady = await coordinator.isModelReady
-                        }
+                        deleteLocalModel()
                     }
                     .font(.caption)
                 }
             }
+            if let modelActionError {
+                Text(modelActionError).font(.caption).foregroundStyle(.red)
+            }
         }
         .padding()
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func deleteLocalModel() {
+        Task {
+            do {
+                try await coordinator.deleteModel()
+                modelReady = await coordinator.isModelReady
+                modelActionError = nil
+            } catch {
+                modelActionError = "无法删除模型：\(error.localizedDescription)"
+            }
+        }
     }
 
     private var statusCard: some View {
@@ -249,6 +273,7 @@ struct ContentView: View {
 
     private var actionButtons: some View {
         VStack(spacing: 12) {
+            NavigationLink("私人素材安全原型（未连接）") { PrivateMaterialPrototypeView() }
             Button { showHistory = true } label: {
                 Label("语音历史", systemImage: "waveform")
                     .frame(maxWidth: .infinity, alignment: .leading)

@@ -3,27 +3,38 @@ import Network
 
 actor KeyboardBridgeServer {
     private var server: BridgeServer?
+    private let ports: [UInt16]
+    private let translationService: any TextTranslating
+    private var generation: UInt64 = 0
     // Main-actor object; bridge hops back with await on each call.
     nonisolated(unsafe) private weak var coordinator: VoiceSessionCoordinator?
 
-    init(coordinator: VoiceSessionCoordinator) {
+    init(coordinator: VoiceSessionCoordinator, ports: [UInt16] = AppConstants.bridgePorts,
+         translationService: any TextTranslating = DisabledTranslationService()) {
         self.coordinator = coordinator
+        self.ports = ports
+        self.translationService = translationService
     }
 
     func start() {
-        server = BridgeServer { [weak self] message, connection in
+        server?.stop()
+        generation &+= 1
+        let epoch = generation
+        server = BridgeServer(ports: ports) { [weak self] message, connection in
             guard let self else { return }
-            Task { await self.handle(message, connection) }
+            Task { await self.handle(message, connection, epoch: epoch) }
         }
         server?.start()
     }
 
     func stop() {
+        generation &+= 1
         server?.stop()
         server = nil
     }
 
-    private func handle(_ message: WireMessage, _ connection: NWConnection) async {
+    private func handle(_ message: WireMessage, _ connection: NWConnection, epoch: UInt64) async {
+        guard epoch == generation, server != nil else { connection.cancel(); return }
         guard BuildToken.validate(message.token) else {
             BridgeServer.send(
                 response: WireResponse(requestID: message.requestID, response: .unauthorized),
@@ -52,6 +63,31 @@ actor KeyboardBridgeServer {
         }
 
         switch message.command {
+        case .confirmAskReview:
+            guard let id = message.jobID, let review = await coordinator.currentStatus.askReview,
+                  review.jobID == id, await coordinator.confirmAskReview(jobID: id, text: review.text) else {
+                BridgeServer.send(response: WireResponse(requestID: message.requestID, response: .error("待确认的问题已变化，请刷新后重试")), over: connection)
+                return
+            }
+            BridgeServer.send(response: WireResponse(requestID: message.requestID, response: .ok(status: await coordinator.currentStatus, jobID: id)), over: connection)
+        case .cancelAskReview:
+            guard let id = message.jobID, await coordinator.cancelAskReview(jobID: id) else {
+                BridgeServer.send(response: WireResponse(requestID: message.requestID, response: .error("待确认的问题已变化，请刷新后重试")), over: connection)
+                return
+            }
+            BridgeServer.send(response: WireResponse(requestID: message.requestID, response: .ok(status: await coordinator.currentStatus, jobID: id)), over: connection)
+        case .translation:
+            guard let payload = message.translationPayload else {
+                BridgeServer.send(response: WireResponse(requestID: message.requestID, response: .error("翻译请求无效")), over: connection)
+                return
+            }
+            let targets = await TranslationPreferences.shared.targets
+            let reply = await TranslationBridgeHandler(service: translationService).handle(payload, targets: targets)
+            guard let encoded = try? JSONEncoder().encode(reply), let text = String(data: encoded, encoding: .utf8) else {
+                BridgeServer.send(response: WireResponse(requestID: message.requestID, response: .error("翻译响应无效")), over: connection)
+                return
+            }
+            BridgeServer.send(response: WireResponse(requestID: message.requestID, response: .text(text)), over: connection)
         case .ping:
             let status = await coordinator.currentStatus
             BridgeServer.send(
@@ -128,9 +164,9 @@ actor KeyboardBridgeServer {
                     )
                 }
             }
-        case .finish:
+        case .finish, .finishTranslation:
             // Enqueue only; do not wait for ASR / polish.
-            let jobID = await coordinator.finishRecordingAndEnqueue()
+            let jobID = await coordinator.finishRecordingAndEnqueue(translation: message.command == .finishTranslation)
             let status = await coordinator.currentStatus
             if let jobID {
                 BridgeServer.send(
@@ -160,14 +196,15 @@ actor KeyboardBridgeServer {
             )
         case .status:
             let requestedJobID = message.jobID
-            if let outcome = await coordinator.takeJobOutcome(jobID: requestedJobID) {
+            let delivery = await coordinator.takeBridgeOutcome(jobID: requestedJobID)
+            if let outcome = delivery.outcome {
                 switch outcome {
                 case .text(let text):
                     let status = await coordinator.currentStatus
                     BridgeServer.send(
                         response: WireResponse(
                             requestID: message.requestID,
-                            response: .text(text, status: status, jobID: requestedJobID ?? status.jobID)
+                            response: .text(text, status: status, jobID: delivery.jobID, placeSuggestions: delivery.placeSuggestions)
                         ),
                         over: connection
                     )
@@ -176,7 +213,7 @@ actor KeyboardBridgeServer {
                     BridgeServer.send(
                         response: WireResponse(
                             requestID: message.requestID,
-                            response: .error(failureMessage, status: status, code: .unknown, jobID: requestedJobID)
+                            response: .error(failureMessage, status: status, code: .unknown, jobID: delivery.jobID)
                         ),
                         over: connection
                     )
@@ -185,7 +222,7 @@ actor KeyboardBridgeServer {
                     BridgeServer.send(
                         response: WireResponse(
                             requestID: message.requestID,
-                            response: .error("已丢弃", status: status, code: .discarded, jobID: requestedJobID)
+                            response: .error("已丢弃", status: status, code: .discarded, jobID: delivery.jobID)
                         ),
                         over: connection
                     )

@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Copy SenseVoice model files into the app container on a connected iPhone.
 # Usage:
-#   ./scripts/seed_model_to_device.sh              # auto-pick first available iPhone
 #   ./scripts/seed_model_to_device.sh <device-id>
 #   ./scripts/seed_model_to_device.sh list
 set -euo pipefail
@@ -11,22 +10,15 @@ SRC_DIR="${MODEL_SRC:-$ROOT/Vendor/Models/$MODEL_NAME}"
 BUNDLE_ID="com.voicepolish.app"
 DEST="Documents/SenseVoiceModels/$MODEL_NAME"
 
-if [[ "${1:-}" == "list" ]]; then
+if [[ "${1:-}" == "list" && $# -eq 1 ]]; then
   exec "$ROOT/scripts/install_device.sh" list
 fi
 
-if [[ -n "${1:-}" ]]; then
-  DEVICE_ID="$1"
-else
-  # Parse first device id from install_device list output.
-  DEVICE_ID="$("$ROOT/scripts/install_device.sh" list 2>/dev/null | awk '/^[ ]*[0-9A-Fa-f-]{16,}/{print $1; exit}')"
-  if [[ -z "$DEVICE_ID" ]]; then
-    echo "No physical iOS device found. Pass device id explicitly." >&2
-    echo "Tip: ./scripts/install_device.sh list" >&2
-    exit 1
-  fi
-  echo "Auto-selected device: $DEVICE_ID"
+if [[ $# -ne 1 ]] || ! [[ "$1" =~ ^([0-9A-Fa-f]{8}-[0-9A-Fa-f]{16}|[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}|[0-9A-Fa-f]{40})$ ]]; then
+  echo "Pass one complete device identifier; use '$0 list' to inspect devices." >&2
+  exit 2
 fi
+DEVICE_ID="$1"
 
 if [[ ! -f "$SRC_DIR/model.int8.onnx" || ! -f "$SRC_DIR/tokens.txt" ]]; then
   echo "Missing model files under $SRC_DIR" >&2

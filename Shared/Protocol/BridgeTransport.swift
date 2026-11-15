@@ -3,6 +3,7 @@ import Network
 
 enum BridgeFrame {
     static let delimiter: UInt8 = 0x0A
+    static let maxBytes = 1_048_576
 
     static func encode<T: Encodable>(_ value: T) throws -> Data {
         var data = try JSONEncoder().encode(value)
@@ -20,39 +21,70 @@ enum BridgeFrame {
 final class BridgeServer: @unchecked Sendable {
     private let lock = NSLock()
     private var listeners: [NWListener] = []
+    private var connections: [ObjectIdentifier: NWConnection] = [:]
+    private var running = false
+    private var generation: UInt64 = 0
+    private let ports: [UInt16]
     private let messageHandler: @Sendable (WireMessage, NWConnection) -> Void
 
-    init(messageHandler: @escaping @Sendable (WireMessage, NWConnection) -> Void) {
+    init(ports: [UInt16] = AppConstants.bridgePorts, messageHandler: @escaping @Sendable (WireMessage, NWConnection) -> Void) {
+        self.ports = ports
         self.messageHandler = messageHandler
     }
 
     func start() {
         stop()
+        lock.lock()
+        generation &+= 1
+        let epoch = generation
+        running = true
+        lock.unlock()
         var created: [NWListener] = []
-        for port in AppConstants.bridgePorts {
-            guard let listener = try? NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: port)!) else {
+        for port in ports {
+            let parameters = NWParameters.tcp
+            parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: NWEndpoint.Port(rawValue: port)!)
+            guard let listener = try? NWListener(using: parameters) else {
                 continue
             }
             listener.newConnectionHandler = { [weak self] connection in
-                self?.handleConnection(connection)
+                guard let self else { connection.cancel(); return }
+                self.handleConnection(connection, epoch: epoch)
             }
             listener.start(queue: .global(qos: .userInitiated))
             created.append(listener)
         }
         lock.lock()
-        listeners = created
+        let valid = running && generation == epoch
+        if valid { listeners = created }
         lock.unlock()
+        if !valid { created.forEach { $0.cancel() } }
     }
 
     func stop() {
         lock.lock()
+        running = false
+        generation &+= 1
         let current = listeners
+        let activeConnections = Array(connections.values)
         listeners.removeAll()
+        connections.removeAll()
         lock.unlock()
         current.forEach { $0.cancel() }
+        activeConnections.forEach { $0.cancel() }
     }
 
-    private func handleConnection(_ connection: NWConnection) {
+    private func handleConnection(_ connection: NWConnection, epoch: UInt64) {
+        let id = ObjectIdentifier(connection)
+        lock.lock()
+        guard running, generation == epoch else { lock.unlock(); connection.cancel(); return }
+        connections[id] = connection
+        lock.unlock()
+        connection.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .failed, .cancelled: self?.forgetConnection(id)
+            default: break
+            }
+        }
         connection.start(queue: .global(qos: .userInitiated))
         let state = ConnectionBuffer()
 
@@ -61,19 +93,30 @@ final class BridgeServer: @unchecked Sendable {
                 if let data {
                     state.append(data)
                 }
-                while let frame = state.nextFrame() {
-                    if let message = try? BridgeFrame.decode(WireMessage.self, from: frame) {
-                        self.messageHandler(message, connection)
+                while true {
+                    switch state.nextFrame() {
+                    case .frame(let frame):
+                        if let message = try? BridgeFrame.decode(WireMessage.self, from: frame) {
+                            self.messageHandler(message, connection)
+                        }
+                    case .tooLarge:
+                        self.forgetConnection(id)
+                        connection.cancel()
+                        return
+                    case .incomplete:
+                        if isComplete { self.forgetConnection(id); connection.cancel() } else { readMore() }
+                        return
                     }
-                }
-                if isComplete {
-                    connection.cancel()
-                } else {
-                    readMore()
                 }
             }
         }
         readMore()
+    }
+
+    private func forgetConnection(_ id: ObjectIdentifier) {
+        lock.lock()
+        connections[id] = nil
+        lock.unlock()
     }
 
     static func send(response: WireResponse, over connection: NWConnection) {
@@ -82,7 +125,8 @@ final class BridgeServer: @unchecked Sendable {
     }
 }
 
-private final class ConnectionBuffer: @unchecked Sendable {
+final class ConnectionBuffer: @unchecked Sendable {
+    enum Result: Equatable { case frame(Data), incomplete, tooLarge }
     private let lock = NSLock()
     private var buffer = Data()
 
@@ -92,13 +136,16 @@ private final class ConnectionBuffer: @unchecked Sendable {
         lock.unlock()
     }
 
-    func nextFrame() -> Data? {
+    func nextFrame() -> Result {
         lock.lock()
         defer { lock.unlock() }
-        guard let idx = buffer.firstIndex(of: BridgeFrame.delimiter) else { return nil }
+        guard let idx = buffer.firstIndex(of: BridgeFrame.delimiter) else {
+            return buffer.count > BridgeFrame.maxBytes ? .tooLarge : .incomplete
+        }
+        guard buffer.distance(from: buffer.startIndex, to: idx) <= BridgeFrame.maxBytes else { return .tooLarge }
         let frame = Data(buffer[..<idx])
         buffer.removeSubrange(...idx)
-        return frame
+        return .frame(frame)
     }
 }
 
@@ -107,21 +154,23 @@ private final class ConnectionBuffer: @unchecked Sendable {
 actor BridgeClient {
     private var connection: NWConnection?
     private let token: String
+    private let ports: [UInt16]
     /// NWConnection supports streaming, but this client previously issued
     /// overlapping receives for concurrent commands. Serialize requests so a
     /// response can never be delivered to the wrong caller.
     private var requestInFlight = false
     private var requestWaiters: [CheckedContinuation<Void, Never>] = []
 
-    init(token: String = BuildToken.generate()) {
+    init(token: String = BuildToken.generate(), ports: [UInt16] = AppConstants.bridgePorts) {
         self.token = token
+        self.ports = ports
     }
 
     func connect() async -> Bool {
         if let connection, connection.state == .ready {
             return true
         }
-        for port in AppConstants.bridgePorts {
+        for port in ports {
             if await tryPort(port) { return true }
         }
         return false
@@ -138,14 +187,19 @@ actor BridgeClient {
         polishMode: String? = nil,
         chineseScript: String? = nil,
         jobID: UUID? = nil,
-        clipboardEntries: [ClipboardEntry]? = nil
+        clipboardEntries: [ClipboardEntry]? = nil,
+        translationPayload: TranslationBridgePayload? = nil,
+        timeoutSeconds: Double = 4
     ) async throws -> WireResponse {
         await acquireRequestSlot()
         defer { releaseRequestSlot() }
 
+        try Task.checkCancellation()
         if connection?.state != .ready {
             guard await connect() else { throw BridgeError.notConnected }
         }
+        do { try Task.checkCancellation() }
+        catch { disconnect(); throw error }
         guard let connection else { throw BridgeError.notConnected }
 
         let message = WireMessage(
@@ -155,9 +209,16 @@ actor BridgeClient {
             polishMode: polishMode,
             jobID: jobID,
             chineseScript: chineseScript,
-            clipboardEntries: clipboardEntries
+            clipboardEntries: clipboardEntries,
+            translationPayload: translationPayload
         )
         let data = try BridgeFrame.encode(message)
+
+        // A suspended companion may keep TCP open without replying. Bound the
+        // request so a lost start acknowledgement cannot lock the keyboard forever.
+        let timeout = DispatchWorkItem { connection.cancel() }
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeoutSeconds, execute: timeout)
+        defer { timeout.cancel() }
 
         do {
             return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<WireResponse, Error>) in
@@ -197,7 +258,12 @@ actor BridgeClient {
     }
 
     private func tryPort(_ port: UInt16) async -> Bool {
-        await withCheckedContinuation { continuation in
+        let connection = NWConnection(
+            host: NWEndpoint.Host("127.0.0.1"),
+            port: NWEndpoint.Port(rawValue: port)!,
+            using: .tcp
+        )
+        let ready = await withCheckedContinuation { continuation in
             final class Once: @unchecked Sendable {
                 private let lock = NSLock()
                 private var done = false
@@ -217,15 +283,9 @@ actor BridgeClient {
             }
 
             let once = Once(continuation)
-            let connection = NWConnection(
-                host: NWEndpoint.Host("127.0.0.1"),
-                port: NWEndpoint.Port(rawValue: port)!,
-                using: .tcp
-            )
-            connection.stateUpdateHandler = { [weak self] state in
+            connection.stateUpdateHandler = { state in
                 switch state {
                 case .ready:
-                    Task { await self?.setConnection(connection) }
                     once.resume(true)
                 case .failed, .cancelled:
                     once.resume(false)
@@ -241,10 +301,8 @@ actor BridgeClient {
                 }
             }
         }
-    }
-
-    private func setConnection(_ connection: NWConnection) {
-        self.connection = connection
+        if ready { self.connection = connection } else { connection.cancel() }
+        return ready
     }
 
     private nonisolated static func receive(
@@ -260,6 +318,12 @@ actor BridgeClient {
             var accumulated = buffer
             if let data {
                 accumulated.append(data)
+            }
+            let frameLength = accumulated.firstIndex(of: BridgeFrame.delimiter).map { accumulated.distance(from: accumulated.startIndex, to: $0) } ?? accumulated.count
+            guard frameLength <= BridgeFrame.maxBytes else {
+                connection.cancel()
+                continuation.resume(throwing: BridgeError.frameTooLarge)
+                return
             }
             guard let idx = accumulated.firstIndex(of: BridgeFrame.delimiter) else {
                 if isComplete {
@@ -283,19 +347,21 @@ enum BridgeError: Error, LocalizedError {
     case notConnected
     case decodeFailed
     case connectionClosed
+    case frameTooLarge
 
     var errorDescription: String? {
         switch self {
         case .notConnected: return "未连接主应用"
         case .decodeFailed: return "通信解析失败"
         case .connectionClosed: return "连接已断开"
+        case .frameTooLarge: return "通信内容过长，请在历史记录中恢复文本"
         }
     }
 
     var bridgeErrorCode: BridgeErrorCode {
         switch self {
         case .notConnected, .connectionClosed: return .companionNotRunning
-        case .decodeFailed: return .unknown
+        case .decodeFailed, .frameTooLarge: return .unknown
         }
     }
 }

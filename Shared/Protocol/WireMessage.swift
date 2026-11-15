@@ -1,11 +1,21 @@
 import Foundation
 
+struct AskReview: Codable, Equatable, Sendable, Identifiable {
+    let jobID: UUID
+    let text: String
+    var id: UUID { jobID }
+}
+
 enum BridgeCommand: String, Codable, Sendable {
     case ping
     case start
     case finish
+    case finishTranslation
     case cancel
     case status
+    case translation
+    case confirmAskReview
+    case cancelAskReview
     /// Toggle optional polish API on the companion/main app.
     case setPolishEnabled
     /// Set polish mode raw value (`correctOnly` / `coding` / `rewrite` / `askLLM`).
@@ -65,6 +75,13 @@ struct BridgeStatus: Codable, Equatable, Sendable {
     let askFollowUpAvailable: Bool?
     /// Whether the next ask capture will include conversation history.
     let askFollowUpArmed: Bool?
+    /// Availability is independent of a queued job's processing phase.
+    let errorCode: BridgeErrorCode?
+    let inputReady: Bool?
+    let resultNotice: String?
+    /// Current main-app preference; missing in older hosts means capture is disabled.
+    let clipboardHistoryEnabled: Bool?
+    let askReview: AskReview?
 
     init(
         state: State,
@@ -76,7 +93,12 @@ struct BridgeStatus: Codable, Equatable, Sendable {
         pendingCount: Int? = nil,
         chineseScript: String? = nil,
         askFollowUpAvailable: Bool? = nil,
-        askFollowUpArmed: Bool? = nil
+        askFollowUpArmed: Bool? = nil,
+        errorCode: BridgeErrorCode? = nil,
+        inputReady: Bool? = nil,
+        resultNotice: String? = nil,
+        clipboardHistoryEnabled: Bool? = nil,
+        askReview: AskReview? = nil
     ) {
         self.state = state
         self.elapsedSeconds = elapsedSeconds
@@ -88,6 +110,11 @@ struct BridgeStatus: Codable, Equatable, Sendable {
         self.chineseScript = chineseScript
         self.askFollowUpAvailable = askFollowUpAvailable
         self.askFollowUpArmed = askFollowUpArmed
+        self.errorCode = errorCode
+        self.inputReady = inputReady
+        self.resultNotice = resultNotice
+        self.clipboardHistoryEnabled = clipboardHistoryEnabled
+        self.askReview = askReview
     }
 }
 
@@ -109,6 +136,7 @@ struct BridgeResponse: Codable, Sendable {
     let jobID: UUID?
     /// Clipboard history returned by `syncClipboardHistory`.
     let clipboardEntries: [ClipboardEntry]?
+    let placeSuggestions: [PlaceNameSuggestion]?
 
     static func ok(
         status: BridgeStatus? = nil,
@@ -123,14 +151,16 @@ struct BridgeResponse: Codable, Sendable {
             message: message,
             errorCode: nil,
             jobID: jobID,
-            clipboardEntries: clipboardEntries
+            clipboardEntries: clipboardEntries,
+            placeSuggestions: nil
         )
     }
 
     static func text(
         _ value: String,
         status: BridgeStatus? = nil,
-        jobID: UUID? = nil
+        jobID: UUID? = nil,
+        placeSuggestions: [PlaceNameSuggestion]? = nil
     ) -> BridgeResponse {
         BridgeResponse(
             outcome: .text,
@@ -139,7 +169,8 @@ struct BridgeResponse: Codable, Sendable {
             message: nil,
             errorCode: nil,
             jobID: jobID,
-            clipboardEntries: nil
+            clipboardEntries: nil,
+            placeSuggestions: placeSuggestions
         )
     }
 
@@ -156,7 +187,8 @@ struct BridgeResponse: Codable, Sendable {
             message: msg,
             errorCode: code,
             jobID: jobID,
-            clipboardEntries: nil
+            clipboardEntries: nil,
+            placeSuggestions: nil
         )
     }
 
@@ -167,7 +199,8 @@ struct BridgeResponse: Codable, Sendable {
         message: "Bad token",
         errorCode: .unauthorized,
         jobID: nil,
-        clipboardEntries: nil
+        clipboardEntries: nil,
+        placeSuggestions: nil
     )
 }
 
@@ -186,6 +219,7 @@ struct WireMessage: Codable, Sendable {
     let chineseScript: String?
     /// Payload for `syncClipboardHistory` (keyboard-authoritative snapshot).
     let clipboardEntries: [ClipboardEntry]?
+    let translationPayload: TranslationBridgePayload?
 
     init(
         command: BridgeCommand,
@@ -195,7 +229,8 @@ struct WireMessage: Codable, Sendable {
         polishMode: String? = nil,
         jobID: UUID? = nil,
         chineseScript: String? = nil,
-        clipboardEntries: [ClipboardEntry]? = nil
+        clipboardEntries: [ClipboardEntry]? = nil,
+        translationPayload: TranslationBridgePayload? = nil
     ) {
         self.protocolVersion = AppConstants.protocolVersion
         self.requestID = requestID
@@ -206,6 +241,7 @@ struct WireMessage: Codable, Sendable {
         self.jobID = jobID
         self.chineseScript = chineseScript
         self.clipboardEntries = clipboardEntries
+        self.translationPayload = translationPayload
     }
 }
 

@@ -3,6 +3,150 @@ import AVFoundation
 @testable import VoicePolishApp
 
 final class VoicePolishKeyboardTests: XCTestCase {
+    @MainActor func testPrivateTermsPersistOnScreenCloseAndClearOnLogout() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("private-terms-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let storage = LocalPrivateTermStorage(directory: directory)
+        let session = PrivateMaterialSession(storage: storage)
+        await session.useDemo("demo-A")
+        let preview = try TermImportPreview.parse(Data(#"{"terms":[{"term":"桂林","kind":"place"},{"term":"阳朔","kind":"place"}]}"#.utf8))
+        try session.confirmImport(preview, selected: [preview.candidates[0].id], expectedAccount: "demo-A", reviewed: true)
+        XCTAssertEqual(try directory.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
+        session.closeScreen()
+        XCTAssertNil(session.account)
+        XCTAssertTrue(session.privateTerms.isEmpty)
+        let reopened = PrivateMaterialSession(storage: storage)
+        await reopened.useDemo("demo-A")
+        XCTAssertEqual(reopened.privateTerms.map(\.term), ["桂林"])
+        reopened.logout()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("terms.json").path))
+        await reopened.useDemo("demo-A")
+        XCTAssertTrue(reopened.privateTerms.isEmpty)
+    }
+    func testShortDictationRejectsLostAddedOrMovedNegation() {
+        for (source, changed) in [("明天不要发给小明", "明天发给小明"),
+                                  ("明天发给小明", "明天不要发给小明"),
+                                  ("不要通知小明但要联系小红", "通知小明但不要联系小红"),
+                                  ("聽日唔好出發", "聽日出發"),
+                                  ("Do not send it", "Send it")] {
+            let draft = DictationTextPreparation(source, mode: .rewrite)
+            XCTAssertTrue(draft.accept(source))
+            XCTAssertFalse(draft.accept(changed))
+        }
+        XCTAssertTrue(DictationTextPreparation("不要超过三千", mode: .askLLM).accept("可以"))
+    }
+    @MainActor func testHistoryUsesItsOwnPersistenceDomain() {
+        let suite = "dictation-history-test-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = DictationHistoryStore(defaults: defaults)
+        let entry = DictationHistoryEntry(transcript: "明天联系小明。", result: nil, mode: .rewrite)
+        store.append(entry)
+        XCTAssertEqual(DictationHistoryStore(defaults: defaults).entries, [entry])
+        store.remove(id: entry.id)
+        XCTAssertTrue(DictationHistoryStore(defaults: defaults).entries.isEmpty)
+    }
+
+    func testSpokenNameSpellingCorrectsUniqueTargetAndKeepsContext() {
+        for source in ["下周可能约了志明去吃饭，志是智慧的智，明是明天的明。",
+                       "下周可能约了志明去吃饭，智是智慧的智，明是明天的明。"] {
+            let result = SpokenCorrection.process(source, mode: .correctOnly)
+            XCTAssertEqual(result.body, "下周可能约了智明去吃饭。")
+            XCTAssertFalse(result.needsConfirmation)
+            XCTAssertFalse(DictationTextPreparation(source, mode: .correctOnly).accept(source))
+        }
+        let ambiguous = "下周志明和志明一起吃饭，志是智慧的智，明是明天的明。"
+        let result = SpokenCorrection.process(ambiguous, mode: .correctOnly)
+        XCTAssertEqual(result.body, ambiguous)
+        XCTAssertTrue(result.needsConfirmation)
+        let similar = "下周志明和智明一起吃饭，志是智慧的智，明是明天的明。"
+        let similarResult = SpokenCorrection.process(similar, mode: .correctOnly)
+        XCTAssertEqual(similarResult.body, similar)
+        XCTAssertTrue(similarResult.needsConfirmation)
+        let noisy = "小周可能约了志明去吃饭字是智慧着志明是明天的明"
+        let preparation = DictationTextPreparation(noisy, mode: .correctOnly)
+        XCTAssertEqual(preparation.body, noisy)
+        XCTAssertTrue(preparation.accept("下周可能约了智明去吃饭。"))
+        let quoted = "他说：志是智慧的智，明是明天的明。"
+        XCTAssertEqual(SpokenCorrection.process(quoted, mode: .correctOnly).body, quoted)
+    }
+
+    func testCorrectionPromptAddressesNoisySpokenNameSpelling() {
+        let prompt = PolishMode.correctOnly.systemPrompt
+        XCTAssertTrue(prompt.contains("字词解释"))
+        XCTAssertTrue(prompt.contains("下周"))
+        XCTAssertTrue(prompt.contains("智明"))
+        XCTAssertTrue(prompt.contains("字是智慧着志明是明天的明"))
+    }
+
+    func testStandaloneSpokenCorrectionOnlyPreviewsUniqueDraftTarget() {
+        let source = "明天联系小明。"
+        let candidate = SpokenCorrection.suggest(explanation: "小明是黄晓明的晓明", draft: source)
+        XCTAssertEqual(candidate?.original, source)
+        XCTAssertEqual(candidate?.corrected, "明天联系晓明。")
+        XCTAssertNil(SpokenCorrection.suggest(explanation: "小明是黄晓明的晓明", draft: "小明和小明"))
+        XCTAssertNil(SpokenCorrection.suggest(explanation: "小明不是黄晓明的晓明", draft: source))
+        XCTAssertNil(SpokenCorrection.suggest(explanation: "小明是黄晓明的晓明。然后发送", draft: source))
+    }
+    func testDictationPolishRejectsChangedNumericTokens() {
+        for (source, changed) in [("温度-3.5度", "温度3.5度"), ("温度-3.5度", "温度-35度"),
+                                  ("费用¥3000", "费用3000"), ("日期2026-11-14", "日期20261114")] {
+            let draft = DictationTextPreparation(source, mode: .rewrite)
+            XCTAssertTrue(draft.accept(source))
+            XCTAssertFalse(draft.accept(changed))
+        }
+        XCTAssertTrue(DictationTextPreparation("3加5是多少", mode: .askLLM).accept("8"))
+    }
+    func testClipboardPreferenceBridgeStatusRoundTrip() throws {
+        for enabled in [true, false] {
+            let status = BridgeStatus(state: .ready, clipboardHistoryEnabled: enabled)
+            let decoded = try JSONDecoder().decode(BridgeStatus.self, from: JSONEncoder().encode(status))
+            XCTAssertEqual(decoded.clipboardHistoryEnabled, enabled)
+        }
+        let legacy = try JSONDecoder().decode(BridgeStatus.self, from: Data(#"{"state":"ready"}"#.utf8))
+        XCTAssertNil(legacy.clipboardHistoryEnabled)
+    }
+    func testBridgeRoundTripOverLoopback() async throws {
+        let port = UInt16.random(in: 50000...60000)
+        let server = BridgeServer(ports: [port]) { message, connection in
+            BridgeServer.send(response: WireResponse(requestID: message.requestID, response: .ok()), over: connection)
+        }
+        server.start()
+        defer { server.stop() }
+        let client = BridgeClient(ports: [port])
+        var connected = false
+        for _ in 0..<10 {
+            if await client.connect() { connected = true; break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTAssertTrue(connected, "loopback listener should accept the keyboard client")
+        guard connected else { return }
+        let result = try await client.send(.ping)
+        XCTAssertEqual(result.response.outcome, .ok)
+        await client.disconnect()
+    }
+
+    func testBridgeFrameBoundsAndMultipleMessages() {
+        let buffer = ConnectionBuffer()
+        buffer.append(Data("first\nsecond\npartial".utf8))
+        XCTAssertEqual(buffer.nextFrame(), .frame(Data("first".utf8)))
+        XCTAssertEqual(buffer.nextFrame(), .frame(Data("second".utf8)))
+        XCTAssertEqual(buffer.nextFrame(), .incomplete)
+        buffer.append(Data("\n".utf8))
+        XCTAssertEqual(buffer.nextFrame(), .frame(Data("partial".utf8)))
+
+        let oversized = ConnectionBuffer()
+        oversized.append(Data(repeating: 65, count: BridgeFrame.maxBytes + 1))
+        XCTAssertEqual(oversized.nextFrame(), .tooLarge)
+        oversized.append(Data([BridgeFrame.delimiter]))
+        XCTAssertEqual(oversized.nextFrame(), .tooLarge)
+
+        let exact = ConnectionBuffer()
+        exact.append(Data(repeating: 65, count: BridgeFrame.maxBytes))
+        XCTAssertEqual(exact.nextFrame(), .incomplete)
+        exact.append(Data([BridgeFrame.delimiter]))
+        XCTAssertEqual(exact.nextFrame(), .frame(Data(repeating: 65, count: BridgeFrame.maxBytes)))
+    }
     func testBuildTokenStableAndValid() {
         let a = BuildToken.generate()
         let b = BuildToken.generate()
@@ -60,7 +204,7 @@ final class VoicePolishKeyboardTests: XCTestCase {
         let cleaned = LocalTextProcessor.process("嗯 今天 啊 去 codex", vocabulary: "")
         XCTAssertFalse(cleaned.contains("嗯"))
         XCTAssertTrue(cleaned.contains("今天"))
-        XCTAssertTrue(cleaned.contains("codex"))
+        XCTAssertTrue(cleaned.contains("Codex"))
     }
 
 
@@ -128,7 +272,7 @@ final class VoicePolishKeyboardTests: XCTestCase {
         XCTAssertEqual(LocalTextProcessor.process("A B C", vocabulary: ""), "ABC")
         XCTAssertEqual(LocalTextProcessor.process("connect to U S B now", vocabulary: ""), "Connect to USB now")
         XCTAssertEqual(LocalTextProcessor.process("I am ready", vocabulary: ""), "I am ready")
-        XCTAssertEqual(LocalTextProcessor.process("open E U P B", vocabulary: "EUPB"), "open EUPB")
+        XCTAssertEqual(LocalTextProcessor.process("open E U P B", vocabulary: "EUPB"), "Open EUPB")
     }
 
     func testJoinTranscriptSegmentsChineseBareGetsPeriod() {
@@ -1113,4 +1257,97 @@ final class VoicePolishKeyboardTests: XCTestCase {
         return buffer
     }
 
+}
+
+private final class ReasoningProbeURLProtocol: URLProtocol, @unchecked Sendable {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        guard let url = request.url,
+              let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil) else { return }
+        let reason = url.host == "filter.example" ? "content_filter" : "length"
+        let data = Data("{\"choices\":[{\"finish_reason\":\"\(reason)\",\"message\":{\"content\":\"\",\"reasoning_content\":\"synthetic\"}}]}".utf8)
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
+extension VoicePolishKeyboardTests {
+    func testReasoningProbeAcceptsLengthButProductionAndFilterReject() async {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [ReasoningProbeURLProtocol.self]
+        let polisher = APITextPolisher(session: URLSession(configuration: config))
+        let settings = PolishingSettings(baseURL: "https://length.example", modelName: "mock", apiKey: "mock")
+        let probe = await polisher.testAvailability(settings: settings)
+        XCTAssertTrue(probe.isSuccess, "A valid probe reaching its output budget still proves connectivity")
+        do {
+            _ = try await polisher.polish("模拟文本", settings: settings)
+            XCTFail("Normal output must not accept a truncated completion")
+        } catch PolishingError.truncatedResponse {
+        } catch {
+            XCTFail("Expected truncated-response error")
+        }
+        let filtered = PolishingSettings(baseURL: "https://filter.example", modelName: "mock", apiKey: "mock")
+        let filterProbe = await polisher.testAvailability(settings: filtered)
+        XCTAssertFalse(filterProbe.isSuccess, "Content filtering must not be reported as an available model")
+    }
+}
+
+private final class TimeoutRetryURLProtocol: URLProtocol, @unchecked Sendable {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var counts: [String: Int] = [:]
+    static func reset() { lock.lock(); defer { lock.unlock() }; counts = [:] }
+    static func count(_ host: String) -> Int { lock.lock(); defer { lock.unlock() }; return counts[host, default: 0] }
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        guard let url = request.url, let host = url.host else { return }
+        Self.lock.lock(); Self.counts[host, default: 0] += 1; let count = Self.counts[host, default: 0]; Self.lock.unlock()
+        if host == "always.example" || ((host == "once.example" || host == "ask.example" || host == "probe.example" || host == "cancel.example") && count == 1) {
+            client?.urlProtocol(self, didFailWithError: URLError(.timedOut)); return
+        }
+        let status = host == "auth.example" ? 401 : 200
+        let content = host == "ask.example" ? "{\"answer\":\"在的\"}" : "完成"
+        let body = try! JSONSerialization.data(withJSONObject: ["choices": [["finish_reason": "stop", "message": ["content": content]]]])
+        let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
+extension VoicePolishKeyboardTests {
+    func testTimeoutRetriesOnceWithoutRetryingAuthOrCancellation() async {
+        TimeoutRetryURLProtocol.reset()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [TimeoutRetryURLProtocol.self]
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+        let provider = APITextPolisher(session: session)
+        func settings(_ host: String, _ mode: PolishMode = .rewrite) -> PolishingSettings {
+            PolishingSettings(baseURL: "https://\(host)", modelName: "mock", apiKey: "mock", mode: mode)
+        }
+        do { let value = try await provider.polish("测试", settings: settings("once.example")); XCTAssertEqual(value, "完成") }
+        catch { XCTFail("one timeout should recover") }
+        XCTAssertEqual(TimeoutRetryURLProtocol.count("once.example"), 2)
+        do { let value = try await provider.polish("在不在", settings: settings("ask.example", .askLLM)); XCTAssertEqual(value, "在的") }
+        catch { XCTFail("ask timeout should recover") }
+        XCTAssertEqual(TimeoutRetryURLProtocol.count("ask.example"), 2)
+        do { _ = try await provider.polish("测试", settings: settings("always.example")); XCTFail("persistent timeout must fail") }
+        catch { XCTAssertEqual(TimeoutRetryURLProtocol.count("always.example"), 2) }
+        do { _ = try await provider.polish("测试", settings: settings("auth.example")); XCTFail("401 must fail") }
+        catch { XCTAssertEqual(TimeoutRetryURLProtocol.count("auth.example"), 1) }
+        let probe = await provider.testAvailability(settings: settings("probe.example"))
+        XCTAssertTrue(probe.isSuccess)
+        XCTAssertEqual(TimeoutRetryURLProtocol.count("probe.example"), 2)
+        let cancelSettings = settings("cancel.example")
+        let task = Task { try await provider.polish("测试", settings: cancelSettings) }
+        for _ in 0..<100 where TimeoutRetryURLProtocol.count("cancel.example") == 0 { try? await Task.sleep(nanoseconds: 5_000_000) }
+        task.cancel()
+        _ = try? await task.value
+        XCTAssertEqual(TimeoutRetryURLProtocol.count("cancel.example"), 1, "cancellation must not send another request")
+    }
 }

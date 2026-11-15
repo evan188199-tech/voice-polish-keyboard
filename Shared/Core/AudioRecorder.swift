@@ -11,6 +11,7 @@ final class AudioRecorder {
     private let targetFormat: AVAudioFormat?
     private let sink = AudioCaptureSink()
     private var sessionActive = false
+    private var sessionEpoch: UInt64 = 0
     private var isRecovering = false
     private var recoveryTask: Task<Void, Never>?
     private var recoveryAttempts = 0
@@ -82,6 +83,8 @@ final class AudioRecorder {
 
     func startSession() async throws {
         guard !sessionActive else { return }
+        sessionEpoch &+= 1
+        let epoch = sessionEpoch
         guard let targetFormat else {
             throw RecorderError.invalidTargetFormat
         }
@@ -93,14 +96,16 @@ final class AudioRecorder {
 
         var lastError: Error?
         for attempt in 1...maxRecoveryAttempts {
+            guard epoch == sessionEpoch else { throw CancellationError() }
             do {
 #if os(iOS)
                 // Re-assert category on every attempt so a mid-start route change
                 // (wired headset / AirPods HFP) can settle into the session.
                 try configureAudioSession()
                 // First attempt can be light; later attempts full-recycle the session.
-                try await waitForInputRouteToSettle(fullRecycle: attempt > 1)
+                try await waitForInputRouteToSettle(fullRecycle: attempt > 1, startEpoch: epoch)
 #endif
+                guard epoch == sessionEpoch else { throw CancellationError() }
                 teardownEngine()
                 try attachEngine()
                 sessionActive = true
@@ -112,6 +117,8 @@ final class AudioRecorder {
 #endif
                 return
             } catch {
+                // A newer session owns the engine and observers; never tear it down.
+                guard epoch == sessionEpoch else { throw CancellationError() }
                 lastError = error
                 // An input AudioUnit which failed to start is not reliably
                 // reusable after an HFP route transition. Reset it and release
@@ -133,6 +140,7 @@ final class AudioRecorder {
     }
 
     func stopSession() {
+        sessionEpoch &+= 1
         recoveryTask?.cancel()
         recoveryTask = nil
         removeObservers()
@@ -209,11 +217,12 @@ final class AudioRecorder {
 
     /// Bluetooth connect/disconnect promotion is asynchronous. Wait until the
     /// session reports an available input route before opening the input unit.
-    private func waitForInputRouteToSettle(fullRecycle: Bool = false) async throws {
+    private func waitForInputRouteToSettle(fullRecycle: Bool = false, startEpoch: UInt64? = nil) async throws {
         if fullRecycle {
             // Drop the previous HFP/built-in binding entirely, then reactivate.
             deactivateAudioSessionForRetry()
             try await Task.sleep(nanoseconds: postDeactivateSettleNanoseconds)
+            if let startEpoch, startEpoch != sessionEpoch { throw CancellationError() }
             try configureAudioSession()
         }
         try await Task.sleep(nanoseconds: activationSettleNanoseconds)

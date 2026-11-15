@@ -13,9 +13,16 @@ struct VoicePolishApp: App {
                     coordinator.setup(settings: settings)
                 }
                 .onOpenURL { url in
-                    guard url.scheme == "voicepolish",
-                          url.host == "activate-session"
-                    else { return }
+                    guard url.scheme == "voicepolish" else { return }
+                    if url.host == "review-ask" {
+                        let value = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
+                            .first(where: { $0.name == "job" })?.value
+                        if let value, let id = UUID(uuidString: value), coordinator.askReview?.jobID == id {
+                            coordinator.askEditorRequested = true
+                        }
+                        return
+                    }
+                    guard url.host == "activate-session" else { return }
                     let hostBundleID = URLComponents(url: url, resolvingAgainstBaseURL: false)?
                         .queryItems?
                         .first(where: { $0.name == "hostBundleID" })?

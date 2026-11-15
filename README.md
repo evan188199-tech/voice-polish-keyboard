@@ -2,11 +2,12 @@
 
 专为 **iOS 18+** 打造的个人离线/云端润色语音输入法：
 
-- **长按说话 (Hold-to-talk)**：iOS 自定义键盘长按图标/按钮说话，松开插入文本，支持左滑取消。
+- **点击说话**：默认语音页，点击开始、再次点击完成；显式取消本段，左右滑动切换文字键盘。
 - **端侧离线识别**：集成 sherpa-onnx + SenseVoiceSmall INT8（支持 中 / 英 / 粤 / 日 / 韩 混合识别）。
+- **保真排版**：明确枚举转列表，长文保守分段，保留识别原文供恢复；云端失败回退完整本地结果（[规则与验证](docs/local-text-processing.md)）。
 - **本地输入风格**：内置只纠错、代码、自然润色和结构化提示词；可创建仅存本机的自定义整理风格。
 - **繁简输出转换**：支持简体中文、香港繁体等输出字体无缝转换。
-- **多段异步并行**：松开立即提交，无需等待识别完成即可连续录制下一段，系统自动按说话顺序依次插入。
+- **多段异步并行**：点击完成立即提交，无需等待识别完成即可连续录制下一段，系统自动按说话顺序依次插入。
 - **主 App 与键盘分离架构**：主 App 统一管理麦克风、SenseVoice 模型与云端 API，通过环回 TCP Bridge (`127.0.0.1:52741-52743`) 为键盘扩展提供响应，免 App Group，支持个人免费 Team 签名。
 
 ## 项目架构
@@ -14,16 +15,16 @@
 | 组件 | 作用 |
 |-----------|------|
 | `VoicePolishApp` | iOS 主应用，负责麦克风录音、SenseVoice 离线识别、云端润色 API、Bridge 服务 |
-| `Keyboard` | iOS 键盘扩展，负责长按录音 UI、模式/繁简单选切换、左滑取消与文本插入 |
+| `Keyboard` | iOS 键盘扩展，负责点击录音 UI、模式/繁简菜单、横滑换页与文本插入 |
 | `Shared` | 通讯协议、数据快照、ASR/润色核心管道、繁简转换器 |
 | `Vendor/SherpaOnnxPackage` | 本地 SPM 包，封装 sherpa-onnx 与 onnxruntime xcframeworks |
 
 ## 多段异步处理管道
 
-- 松开麦克风后**立即入队提交**，无需等待上一段识别或润色完成，可随时按住开始下一段录制。
+- 点击完成后**立即入队提交**，无需等待上一段识别或润色完成，可随时点击开始下一段录制。
 - 本地 SenseVoice 识别按 **FIFO 严格串行（并发 1）**；云端 LLM 润色最多 **并发 2**。
 - 云端响应时间即使颠倒，最终文本也会**严格按说话顺序交付插入**。
-- 左滑取消仅丢弃当前正在录制的段落，已提交的任务保留并依次处理。
+- 显式取消仅丢弃当前正在录制的段落，已提交的任务保留并依次处理。
 - 每段结果会保存到本机语音历史；键盘保留最近结果，可在宿主文本框拒绝插入时重新插入或复制。
 
 ## 4 种润色模式
@@ -35,7 +36,9 @@
 | 润色词句 (默认) | 润色 | 口头语整理、标点规范、语序微调 |
 | 问 LLM | 问答 | 将语音识别结果作为问题或指令执行，仅输出最终结果（如“请用英语输出『你多久回来一次』” → 输出 `How often do you come back?`）。若云端失败，自动回退到本地识别原文 |
 
-循环切换说明：点击键盘右侧 2×2 模式按钮单选切换；再次点击当前已选模式可关闭润色。
+点击顶部模式菜单选择；再次选择当前模式可关闭润色。语音就绪和处理队列分开显示；更多菜单可重新插入/复制最近结果。
+
+本轮实现范围、状态表与未验证项见 [语音键盘验收记录](docs/voice-keyboard.md)。
 
 ## iOS 构建与安装
 
@@ -43,15 +46,16 @@
 
 - Xcode 16+ (或 Xcode-beta) 及 iOS 18+ SDK
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`)
-- Apple Developer 个人 Team ID（在 `project.yml` 中配置）
+- Apple Developer 个人 Team ID（设备安装脚本必须显式提供）
 
 ### 编译与部署到设备
 
 ```bash
 cd voice-polish-keyboard
 
-# 1. 生成项目并编译安装到连接的 iPhone
-./scripts/install_device.sh
+# 1. 查看设备标识，并在干净 checkout 上显式指定目标、团队和当前完整提交
+./scripts/install_device.sh list
+SOURCE_COMMIT="$(git rev-parse HEAD)" DEVELOPMENT_TEAM=<team-id> ./scripts/install_device.sh <device-id>
 
 # 2. 解锁 iPhone 后，启动主应用
 xcrun devicectl device process launch --device <device-id> com.voicepolish.app
@@ -60,7 +64,7 @@ xcrun devicectl device process launch --device <device-id> com.voicepolish.app
 可选：从 Mac 本地预置模型文件到手机：
 
 ```bash
-./scripts/seed_model_to_device.sh
+./scripts/seed_model_to_device.sh <device-id>
 ```
 
 ### 首次使用检查清单
@@ -93,3 +97,20 @@ xcodegen generate
 xcodebuild -project VoicePolishKeyboard.xcodeproj -scheme VoicePolishApp \
   -destination 'platform=iOS Simulator,name=iPhone 16' test
 ```
+
+Linux 逻辑检查（需 Swift 6；不代表 iOS 构建/真机通过）：
+
+```bash
+./scripts/test_portable.sh
+```
+
+## 本轮独立增量与验证边界
+
+- [语音优先界面与交互（#1）](docs/voice-keyboard.md)
+- [长段保真整理与口述纠字（#2、#3）](docs/local-text-processing.md)
+- [本地地名词典与候选确认（#4）](docs/place-dictionary.md)
+- [私人词汇/素材安全原型（#5，生产账号未连接）](docs/private-material-prototype.md)
+
+以上有 Swift 6 便携逻辑与 mock 检查；不等于已通过 Xcode、真实 ASR、iPhone UI 或宿主分享/粘贴验证。已有私有 API、模型许可和仓库许可问题仍待处理，不宣称 App Store 合规。
+
+本轮实跑结果与各 issue 未完成项见 [验证记录](docs/validation.md)。

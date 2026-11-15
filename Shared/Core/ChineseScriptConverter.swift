@@ -18,26 +18,20 @@ enum ChineseScriptConverter {
     static func convert(_ text: String, direction: Direction?) -> String {
         guard let direction, !text.isEmpty else { return text }
         // ICU transforms: simplified Hans <-> traditional Hant.
-        let transformName: CFString
+        let transformName: StringTransform
         switch direction {
         case .toTraditional:
-            transformName = "Hans-Hant" as CFString
+            transformName = StringTransform("Hans-Hant")
         case .toSimplified:
-            transformName = "Hant-Hans" as CFString
+            transformName = StringTransform("Hant-Hans")
         }
-        return applyTransform(text, transformName)
+        return text.applyingTransform(transformName, reverse: false) ?? text
     }
 
     static func alreadyInDirection(_ text: String, direction: Direction) -> Bool {
         return convert(text, direction: direction) == text
     }
 
-    private static func applyTransform(_ text: String, _ transformName: CFString) -> String {
-        let mutable = NSMutableString(string: text)
-        var range = CFRange(location: 0, length: CFStringGetLength(mutable as CFString))
-        let ok = CFStringTransform(mutable as CFMutableString, &range, transformName, false)
-        return ok ? (mutable as String) : text
-    }
 }
 
 /// User-facing preference persisted in AppSettings.

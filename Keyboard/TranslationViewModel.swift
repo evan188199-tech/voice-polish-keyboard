@@ -1,0 +1,302 @@
+import Foundation
+import Combine
+
+/// Independent flow module. Integration must supply ASR text in speaking order and
+/// an insertion callback for the current host appearance. No host context is read here.
+@MainActor final class TranslationViewModel: ObservableObject {
+    @Published private(set) var draft = TranslationDraft()
+    @Published private(set) var capability = TranslationCapability.unavailable
+    @Published private(set) var lastEvent: TranslationEvent?
+    @Published private(set) var pendingCount = 0
+    @Published var showPreview = false
+    @Published var isEditingSource = false
+    @Published var previewBeforeInsert = false {
+        didSet {
+            if previewBeforeInsert != oldValue, let id = draft.requestID, draft.isBusy { cancel(id) }
+        }
+    }
+    @Published private(set) var message = "翻译尚未连接"
+    var onInsert: ((String) -> Void)?
+    var canExplicitlyInsert: (() -> Bool)?
+    var onVoiceFinished: ((UUID) -> Void)?
+    var onRecoveryResolved: (() -> Void)?
+    var onRecoveryRequired: (() -> Void)?
+    var onCaptureTarget: ((UUID) -> Void)?
+    var onAutomaticInsert: ((UUID, String) -> Bool)?
+    var onAbandonTarget: ((UUID) -> Void)?
+    @Published private(set) var lastTranslationCanInsert = false
+    private let service: any TextTranslating
+    private let defaults: UserDefaults
+    private let timeoutNanoseconds: UInt64
+    private var isVisible = false
+    private var hostSessionID: UUID?
+    private var generation: UInt64 = 0
+    private var queue: [TranslationRequest] = []
+    private var worker: Task<Void, Never>?
+    private var current: Task<TranslationEvent, Error>?
+    private var currentRequest: TranslationRequest?
+    private var originalInserted = false
+    private var currentID: UUID?
+    private var cancelled = Set<UUID>()
+    private var delivered = Set<UUID>()
+    private var voiceContexts: [UUID: TranslationContext] = [:]
+    init(service: any TextTranslating = DisabledTranslationService(), defaults: UserDefaults = .standard,
+         timeoutNanoseconds: UInt64 = 15_000_000_000) {
+        self.service = service; self.defaults = defaults; self.timeoutNanoseconds = timeoutNanoseconds
+        draft.editSource(defaults.string(forKey: "translation_source_v1") ?? "")
+        if let data = defaults.data(forKey: "translation_target_v1"), let target = try? JSONDecoder().decode(TranslationTarget.self, from: data), target.isValid {
+            draft.changeTarget(target)
+        }
+        if let data = defaults.data(forKey: "translation_recovery_v1") {
+            lastEvent = try? JSONDecoder().decode(TranslationEvent.self, from: data)
+            lastTranslationCanInsert = defaults.bool(forKey: "translation_recovery_insertable_v1") && lastEvent?.isSuccess == true
+        }
+    }
+    func appear(hasFullAccess: Bool, hostSessionID: UUID? = nil) async {
+        if let hostSessionID, hostSessionID != self.hostSessionID {
+            if isVisible { cancelAll() }
+            self.hostSessionID = hostSessionID
+        }
+        if !isVisible { generation &+= 1; isVisible = true }
+        let epoch = generation
+        guard hasFullAccess else {
+            capability = TranslationCapability(serviceID: "", serviceLabel: "需要完全访问", isAvailable: false,
+                supportedTargets: [], orderedTargets: TranslationTarget.choices, failure: .noFullAccess)
+            message = TranslationFailure.noFullAccess.message
+            return
+        }
+        let result = await service.capability
+        guard isVisible, epoch == generation else { return }
+        if capability.serviceID != result.serviceID, !capability.serviceID.isEmpty { cancelAll() }
+        capability = result
+        message = result.isAvailable ? "翻译服务：\(result.serviceLabel) · 只发送本次原文" : (result.failure ?? .unavailable).message
+    }
+    func disappear() {
+        isVisible = false; generation &+= 1
+        cancelAll(); onInsert = nil; isEditingSource = false
+    }
+    func editSource(_ text: String) {
+        if let id = draft.requestID { cancel(id) }
+        draft.editSource(text); originalInserted = false; persistDraft()
+    }
+    func appendSource(_ text: String) { editSource(draft.source + text) }
+    func deleteSourceBackward() { guard !draft.source.isEmpty else { return }; editSource(String(draft.source.dropLast())) }
+    func chooseTarget(_ target: TranslationTarget) {
+        guard target.isValid else { return }
+        if let id = draft.requestID { cancel(id) }
+        draft.changeTarget(target); persistDraft()
+    }
+    func restoreSource() {
+        if let id = draft.requestID { cancel(id) }
+        draft.restoreSource(); persistDraft()
+    }
+    func restoreLastOriginal() { if let lastEvent { editSource(lastEvent.source); showPreview = true } }
+    @discardableResult func submitTyped() -> UUID? {
+        guard isVisible, !draft.isBusy else { return nil }
+        guard !lastTranslationCanInsert else {
+            message = "请先处理已保留的译文"; showPreview = true; return nil
+        }
+        if let failure = availabilityFailure(for: draft.target) {
+            draft.fail(failure, id: draft.requestID); message = failure.message; return nil
+        }
+        let context = TranslationContext(target: draft.target, sourceKind: .typed,
+            deliveryMode: previewBeforeInsert ? .preview : .automatic, consentServiceID: capability.serviceID)
+        guard let request = draft.begin(context) else {
+            message = draft.translation != nil ? "原文和目标未改变，译文已保留；修改后可重新翻译。" : (draft.failure?.message ?? "请检查原文")
+            return nil
+        }
+        if context.deliveryMode == .automatic { onCaptureTarget?(context.id) }
+        enqueue(request)
+        return context.id
+    }
+    /// Call only after a language is deliberately selected, never on press-down alone.
+    func prepareVoice(target: TranslationTarget) -> TranslationContext? {
+        guard isVisible else { return nil }
+        guard !lastTranslationCanInsert else {
+            message = "请先处理已保留的译文"; showPreview = true; return nil
+        }
+        if let failure = availabilityFailure(for: target) { message = failure.message; return nil }
+        let context = TranslationContext(target: target, sourceKind: .voice, consentServiceID: capability.serviceID)
+        onCaptureTarget?(context.id)
+        voiceContexts[context.id] = context
+        return context
+    }
+    /// The ASR owner supplies final original text in its existing FIFO order.
+    func receiveVoiceSource(_ source: String, contextID: UUID) {
+        guard isVisible, let context = voiceContexts.removeValue(forKey: contextID), !cancelled.contains(contextID) else { return }
+        guard !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            retain(TranslationEvent(context: context, source: source, translation: nil, failure: .emptySource)); onVoiceFinished?(contextID); return
+        }
+        guard source.utf8.count <= TranslationRequest.maxSourceUTF8Bytes else {
+            retain(TranslationEvent(context: context, source: source, translation: nil, failure: .inputTooLong)); onVoiceFinished?(contextID); return
+        }
+        enqueue(TranslationRequest(context: context, source: source))
+    }
+    /// ASR failed before text reached the translation service.
+    func failVoiceCapture(contextID: UUID, reason: String) {
+        guard voiceContexts.removeValue(forKey: contextID) != nil else { return }
+        onAbandonTarget?(contextID)
+        message = reason
+        onVoiceFinished?(contextID)
+    }
+    func cancel(_ id: UUID) {
+        let voice = voiceContexts[id] != nil || currentRequest?.context.id == id && currentRequest?.context.sourceKind == .voice || queue.contains { $0.context.id == id && $0.context.sourceKind == .voice }
+        if let request = currentRequest?.context.id == id ? currentRequest : queue.first(where: { $0.context.id == id }) {
+            retain(TranslationEvent(context: request.context, source: request.source, translation: nil, failure: .cancelled))
+        }
+        clearPreviewRecovery(id: id)
+        onAbandonTarget?(id)
+        cancelled.insert(id); voiceContexts[id] = nil
+        queue.removeAll { $0.context.id == id }
+        if currentID == id { current?.cancel() }
+        if draft.requestID == id { draft.cancel() }
+        pendingCount = queue.count + (currentID == nil ? 0 : 1)
+        Task { await service.cancel(id) }
+        message = TranslationFailure.cancelled.message
+        if voice { onVoiceFinished?(id) }
+    }
+    func cancelDraft() { if let id = draft.requestID { cancel(id) } else { draft.cancel() }; persistDraft() }
+    func insertPreview() {
+        guard isVisible, canExplicitlyInsert?() == true, let insert = onInsert,
+              let text = draft.consumePreview() else { return }
+        let resolved = draft.requestID.map { clearPreviewRecovery(id: $0, notify: false) } ?? false
+        insert(text); message = "已尝试插入草稿，不会自动发送"
+        if resolved { onRecoveryResolved?(); startWorker() }
+    }
+    func insertLastTranslation() {
+        guard isVisible, canExplicitlyInsert?() == true, lastTranslationCanInsert,
+              let event = lastEvent, let text = event.translation, let insert = onInsert else { return }
+        if event.context.deliveryMode == .preview, draft.requestID == event.context.id { _ = draft.consumePreview() }
+        lastTranslationCanInsert = false
+        defaults.set(false, forKey: "translation_recovery_insertable_v1")
+        insert(text)
+        message = "已按你的选择插入当前输入框；原字段无法确认"
+        onRecoveryResolved?()
+        startWorker()
+    }
+    func abandonLastTranslationInsertion() {
+        guard lastTranslationCanInsert else { return }
+        if let event = lastEvent, event.context.deliveryMode == .preview, draft.requestID == event.context.id {
+            _ = draft.consumePreview()
+        }
+        lastTranslationCanInsert = false
+        defaults.set(false, forKey: "translation_recovery_insertable_v1")
+        message = "译文仍可查看，已放弃本次插入"
+        onRecoveryResolved?()
+        startWorker()
+    }
+    func insertOriginal() {
+        guard isVisible, canExplicitlyInsert?() == true, let insert = onInsert,
+              !draft.source.isEmpty, !originalInserted else { return }
+        let original = draft.source
+        var resolved = draft.requestID.map { clearPreviewRecovery(id: $0, notify: false) } ?? false
+        if lastTranslationCanInsert, let event = lastEvent, event.source == original {
+            lastTranslationCanInsert = false
+            defaults.set(false, forKey: "translation_recovery_insertable_v1")
+            resolved = true
+        }
+        cancelDraft(); originalInserted = true
+        insert(original); message = "已明确选择插入原文，不是译文"
+        if resolved { onRecoveryResolved?(); startWorker() }
+    }
+    private func availabilityFailure(for target: TranslationTarget) -> TranslationFailure? {
+        guard capability.isAvailable else { return capability.failure ?? .unavailable }
+        guard !capability.serviceID.isEmpty else { return .missingConfiguration }
+        guard capability.supportedTargets.contains(target) else { return .unsupportedTarget }
+        return nil
+    }
+    private func enqueue(_ request: TranslationRequest) {
+        queue.append(request); pendingCount = queue.count + (currentID == nil ? 0 : 1)
+        message = "翻译中 → \(request.context.target.displayName)"
+        startWorker()
+    }
+    private func startWorker() {
+        guard worker == nil else { return }
+        let epoch = generation
+        worker = Task { [weak self] in
+            guard let self else { return }
+            defer { if self.generation == epoch { self.worker = nil; self.current = nil; self.currentID = nil; self.currentRequest = nil; self.pendingCount = self.queue.count } }
+            while !Task.isCancelled, self.isVisible, self.generation == epoch,
+                  !self.lastTranslationCanInsert, !self.queue.isEmpty {
+                let request = self.queue.removeFirst(), id = request.context.id
+                guard !self.cancelled.contains(id) else { continue }
+                self.currentID = id; self.currentRequest = request
+                let work = Task { try await TranslationRequestExecutor.run(request, service: self.service, timeoutNanoseconds: self.timeoutNanoseconds) }
+                self.current = work
+                let event: TranslationEvent
+                do {
+                    let result = try await work.value
+                    guard result.context == request.context, result.source == request.source else { throw TranslationFailure.invalidResult }
+                    guard result.isSuccess else { throw result.failure ?? .emptyResult }
+                    guard TranslationContentGuard.validate(source: request.source, translation: result.translation ?? "") else { throw TranslationFailure.unsafeResult }
+                    event = result
+                } catch {
+                    event = TranslationEvent(context: request.context, source: request.source, translation: nil,
+                        failure: (error as? TranslationFailure) ?? (error is CancellationError ? .cancelled : .invalidResult))
+                }
+                guard self.isVisible, self.generation == epoch else { return }
+                self.current = nil; self.currentID = nil; self.currentRequest = nil
+                self.pendingCount = self.queue.count
+                guard !self.cancelled.contains(id), !self.delivered.contains(id) else { continue }
+                if request.context.sourceKind == .typed {
+                    guard self.draft.receive(event) else { continue }
+                }
+                self.delivered.insert(id)
+                self.retain(event)
+                if event.isSuccess, request.context.deliveryMode == .automatic, let text = event.translation {
+                    if self.onAutomaticInsert?(id, text) == true {
+                        self.lastTranslationCanInsert = false
+                        self.defaults.set(false, forKey: "translation_recovery_insertable_v1")
+                        self.message = "已尝试插入译文草稿，不会自动发送"
+                    } else {
+                        self.lastTranslationCanInsert = true
+                        self.defaults.set(true, forKey: "translation_recovery_insertable_v1")
+                        self.onRecoveryRequired?()
+                        self.message = "输入位置已变化或无法确认 · 译文已保留，可主动恢复"
+                    }
+                } else {
+                    self.onAbandonTarget?(id)
+                    if event.isSuccess, request.context.deliveryMode == .preview {
+                        self.lastTranslationCanInsert = true
+                        self.defaults.set(true, forKey: "translation_recovery_insertable_v1")
+                        self.onRecoveryRequired?()
+                    }
+                }
+                if request.context.sourceKind == .voice { self.onVoiceFinished?(id) }
+            }
+        }
+    }
+    private func retain(_ event: TranslationEvent) {
+        lastEvent = event
+        lastTranslationCanInsert = false
+        defaults.set(false, forKey: "translation_recovery_insertable_v1")
+        message = event.failure?.message ?? "译文可恢复，请核对姓名、地名、否定与语气"
+        if let data = try? JSONEncoder().encode(event) { defaults.set(data, forKey: "translation_recovery_v1") }
+        persistDraft()
+    }
+    @discardableResult private func clearPreviewRecovery(id: UUID, notify: Bool = true) -> Bool {
+        guard lastTranslationCanInsert, let event = lastEvent, event.context.id == id,
+              event.context.deliveryMode == .preview else { return false }
+        lastTranslationCanInsert = false
+        defaults.set(false, forKey: "translation_recovery_insertable_v1")
+        if notify { onRecoveryResolved?(); startWorker() }
+        return true
+    }
+    private func cancelAll() {
+        generation &+= 1
+        // A queued request must not overwrite an earlier successful result that
+        // is still waiting for the user's explicit insertion decision.
+        if !lastTranslationCanInsert, let request = currentRequest ?? queue.last {
+            retain(TranslationEvent(context: request.context, source: request.source, translation: nil, failure: .cancelled))
+        }
+        for request in queue { cancelled.insert(request.context.id) }
+        if let id = currentID { cancelled.insert(id); Task { await service.cancel(id) } }
+        queue.removeAll(); voiceContexts.removeAll()
+        current?.cancel(); worker?.cancel(); current = nil; worker = nil; currentID = nil; currentRequest = nil
+        draft.cancel(); pendingCount = 0
+    }
+    private func persistDraft() {
+        defaults.set(draft.source, forKey: "translation_source_v1")
+        if let data = try? JSONEncoder().encode(draft.target) { defaults.set(data, forKey: "translation_target_v1") }
+    }
+}

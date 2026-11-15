@@ -1,5 +1,6 @@
 import Foundation
 import SherpaOnnx
+import CryptoKit
 
 protocol SpeechTranscribing: Sendable {
     var isReady: Bool { get async }
@@ -7,15 +8,21 @@ protocol SpeechTranscribing: Sendable {
     var modelDisplayName: String { get }
     var downloadProgress: Double? { get async }
     var preparePhase: String? { get async }
+    var lastRawTranscript: String? { get async }
     func prepareModel() async throws
     func removeModelFiles() async throws
     /// Transcribe raw 16 kHz mono Int16 PCM. Long audio is VAD-chunked automatically.
     func transcribe(_ pcmData: Data, vocabulary: String) async throws -> String
 }
 
+extension SpeechTranscribing {
+    var lastRawTranscript: String? { get async { nil } }
+}
+
 // MARK: - sherpa-onnx SenseVoiceSmall INT8
 
 actor SenseVoiceTranscriber: SpeechTranscribing {
+    private(set) var lastRawTranscript: String?
     private var recognizer: SherpaOnnxOfflineRecognizer?
     /// Keep model path strings alive while the C API holds pointers during setup.
     private var retainedPaths: [String] = []
@@ -24,8 +31,8 @@ actor SenseVoiceTranscriber: SpeechTranscribing {
     let modelDisplayName = AppConstants.senseVoiceModelDisplayName
     var isReady: Bool { recognizer != nil }
     var hasModelFiles: Bool {
-        FileManager.default.fileExists(atPath: modelPath.path)
-            && FileManager.default.fileExists(atPath: tokensPath.path)
+        ModelDownloadValidation.isUsableFile(modelPath, rejectHTML: true)
+            && ModelDownloadValidation.isUsableFile(tokensPath, rejectHTML: false)
     }
     private(set) var downloadProgress: Double?
     private(set) var preparePhase: String?
@@ -44,6 +51,7 @@ actor SenseVoiceTranscriber: SpeechTranscribing {
     private var tokensPath: URL { modelDir.appendingPathComponent("tokens.txt") }
 
     func prepareModel() async throws {
+        defer { preparePhase = nil; downloadProgress = nil }
         preparePhase = hasModelFiles ? "loading" : "downloading"
         if !hasModelFiles {
             try await downloadModel()
@@ -67,6 +75,7 @@ actor SenseVoiceTranscriber: SpeechTranscribing {
     }
 
     func transcribe(_ pcmData: Data, vocabulary: String) async throws -> String {
+        lastRawTranscript = nil
         guard let recognizer else { throw TranscriberError.notReady }
 
         let samples = pcmToFloats(pcmData)
@@ -95,6 +104,7 @@ actor SenseVoiceTranscriber: SpeechTranscribing {
         // Process each VAD chunk independently so spoken-letter collapsing
         // respects pause boundaries, then smart-join the cleaned segments.
         // Cloud polish later keeps LLM output as-is; this only shapes local ASR text.
+        lastRawTranscript = texts.joined(separator: "\n")
         let joined = LocalTextProcessor.processSegments(texts, vocabulary: vocabulary)
         guard !joined.isEmpty else { throw TranscriberError.noText }
         return joined
@@ -110,6 +120,10 @@ actor SenseVoiceTranscriber: SpeechTranscribing {
         }
         guard FileManager.default.fileExists(atPath: tokensFile) else {
             throw TranscriberError.modelNotFound(tokensFile)
+        }
+        guard (try? ModelDownloadValidation.matchesSHA256(modelPath, expected: AppConstants.senseVoiceModelSHA256)) == true,
+              (try? ModelDownloadValidation.matchesSHA256(tokensPath, expected: AppConstants.senseVoiceTokensSHA256)) == true else {
+            throw TranscriberError.invalidModel
         }
 
         retainedPaths = [modelFile, tokensFile]
@@ -133,7 +147,11 @@ actor SenseVoiceTranscriber: SpeechTranscribing {
             modelConfig: modelConfig,
             decodingMethod: "greedy_search"
         )
-        recognizer = SherpaOnnxOfflineRecognizer(config: &config)
+        guard let loaded = SherpaOnnxOfflineRecognizer(validating: &config) else {
+            retainedPaths.removeAll()
+            throw TranscriberError.invalidModel
+        }
+        recognizer = loaded
     }
 
     private func downloadModel() async throws {
@@ -226,6 +244,9 @@ enum TranscriberError: LocalizedError {
     case noText
     case downloadFailed(String)
     case modelInUse
+    case modelPreparing
+    case modelDeleting
+    case invalidModel
 
     var errorDescription: String? {
         switch self {
@@ -234,7 +255,50 @@ enum TranscriberError: LocalizedError {
         case .noText: return "未识别到语音内容"
         case .downloadFailed(let detail): return "模型文件下载失败: \(detail)"
         case .modelInUse: return "语音会话运行中，无法删除模型"
+        case .modelPreparing: return "模型正在准备，请完成后再删除。"
+        case .modelDeleting: return "模型正在删除，请完成后再操作。"
+        case .invalidModel: return "模型无法加载，请删除模型后重新下载。"
         }
+    }
+}
+
+enum ModelDownloadValidationError: LocalizedError {
+    case invalidResponse, httpStatus(Int), htmlResponse, emptyFile
+    var errorDescription: String? {
+        switch self {
+        case .invalidResponse: "下载服务器未返回有效响应。"
+        case .httpStatus(let status): "下载服务器返回 HTTP \(status)。"
+        case .htmlResponse: "下载服务器返回了网页，而不是模型文件。"
+        case .emptyFile: "下载的模型文件为空。"
+        }
+    }
+}
+enum ModelDownloadValidation {
+    static func matchesSHA256(_ file: URL, expected: String) throws -> Bool {
+        let handle = try FileHandle(forReadingFrom: file)
+        defer { try? handle.close() }
+        var digest = SHA256()
+        while let chunk = try handle.read(upToCount: 1_048_576), !chunk.isEmpty { digest.update(data: chunk) }
+        return digest.finalize().map { String(format: "%02x", $0) }.joined() == expected
+    }
+    static func isUsableFile(_ file: URL, rejectHTML: Bool) -> Bool {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: file.path),
+              attributes[.type] as? FileAttributeType == .typeRegular,
+              let size = attributes[.size] as? NSNumber, size.int64Value > 0 else { return false }
+        guard rejectHTML else { return true }
+        guard let handle = try? FileHandle(forReadingFrom: file) else { return false }
+        defer { try? handle.close() }
+        guard let prefix = try? handle.read(upToCount: 512), !prefix.isEmpty else { return false }
+        let ignorable = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\u{feff}"))
+        let text = String(decoding: prefix, as: UTF8.self).trimmingCharacters(in: ignorable).lowercased()
+        return !text.hasPrefix("<!doctype html") && !text.hasPrefix("<html")
+    }
+    static func check(response: URLResponse?, file: URL) throws {
+        guard let response = response as? HTTPURLResponse else { throw ModelDownloadValidationError.invalidResponse }
+        guard response.statusCode == 200 else { throw ModelDownloadValidationError.httpStatus(response.statusCode) }
+        if response.mimeType?.lowercased() == "text/html" { throw ModelDownloadValidationError.htmlResponse }
+        let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
+        guard let size = attributes[.size] as? NSNumber, size.int64Value > 0 else { throw ModelDownloadValidationError.emptyFile }
     }
 }
 
@@ -258,6 +322,7 @@ private final class ProgressDownloadDelegate: NSObject, URLSessionDownloadDelega
             .appendingPathComponent(UUID().uuidString)
             .appendingPathExtension("download")
         do {
+            try ModelDownloadValidation.check(response: downloadTask.response, file: location)
             try FileManager.default.moveItem(at: location, to: dest)
             completion?.resume(returning: dest)
         } catch {

@@ -12,3 +12,6 @@ dist/
 *.xcworkspace/xcuserdata/
 Vendor/Frameworks/
 Vendor/Models/
+
+# Generated UI test project
+Tests/KeyboardUI/VoiceUIHarness.xcodeproj/

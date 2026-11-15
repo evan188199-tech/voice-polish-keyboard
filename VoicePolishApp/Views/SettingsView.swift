@@ -67,6 +67,11 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section("翻译") {
+                    NavigationLink("翻译目标语言与服务") {
+                        TranslationSettingsView(serviceID: nil, serviceLabel: "当前没有启用的翻译服务")
+                    }
+                }
                 Section("繁简输出") {
                     Picker("输出字体", selection: $settings.chineseScript) {
                         ForEach(ChineseScriptPreference.allCases, id: \.self) { pref in
@@ -208,7 +213,7 @@ struct SettingsView: View {
                 } header: {
                     Text("剪切板历史")
                 } footer: {
-                    Text("开启后，键盘每次唤出时会自动读一次当前剪切板并记入历史（最多 50 条，7 天后自动清理）。iOS 限制：键盘在后台无法监听剪切板，所以复制后需要让键盘弹出一次才能入库；读剪切板时系统可能弹出“粘贴自 XX”提示，属于系统隐私机制，无法完全消除。")
+                    Text("开启后，键盘连接主应用并取得当前设置时，会在每次唤出后最多读取一次剪切板（最多 50 条，7 天后清理）。关闭、未连接或主应用版本过旧时不会自动读取；系统可能显示粘贴提示。")
                 }
 
                 Section {

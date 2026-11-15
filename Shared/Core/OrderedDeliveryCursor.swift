@@ -33,6 +33,8 @@ enum VoiceJobStatusText {
         switch phase {
         case .queuedASR, .transcribing:
             base = "识别中…"
+        case .awaitingAskReview:
+            base = "请核对识别文字"
         case .queuedPolish, .polishing:
             base = polishMode.processingStatusMessage
         case .ready:
@@ -52,6 +54,7 @@ enum VoiceJobStatusText {
 enum VoiceJobPhase: String, Equatable, Sendable {
     case queuedASR
     case transcribing
+    case awaitingAskReview
     case queuedPolish
     case polishing
     case ready

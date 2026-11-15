@@ -58,8 +58,9 @@ final class ClipboardHistoryTests: XCTestCase {
     func testLoadSaveRoundtrip() {
         let defaults = UserDefaults(suiteName: "clipboard-test-\(UUID().uuidString)")!
         var entries: [ClipboardEntry] = []
-        entries = ClipboardHistoryStore.append("alpha", to: entries, at: Date(timeIntervalSince1970: 1000))
-        entries = ClipboardHistoryStore.append("beta", to: entries, at: Date(timeIntervalSince1970: 2000))
+        let now = Date()
+        entries = ClipboardHistoryStore.append("alpha", to: entries, at: now.addingTimeInterval(-1))
+        entries = ClipboardHistoryStore.append("beta", to: entries, at: now)
         ClipboardHistoryStore.save(entries, defaults: defaults)
 
         let loaded = ClipboardHistoryStore.load(defaults: defaults)
@@ -89,12 +90,12 @@ final class ClipboardHistoryTests: XCTestCase {
 
         let e1 = ClipboardEntry(text: "A", createdAt: Date())
         let e2 = ClipboardEntry(text: "B", createdAt: Date())
-        mirror.merge([e1, e2])
-        XCTAssertEqual(mirror.entries.count, 2)
+        XCTAssertEqual(mirror.merge([e1, e2]).count, 2)
+        XCTAssertEqual(ClipboardMirrorStore(defaults: defaults).entries.count, 2)
 
         mirror.hide(id: e1.id)
-        XCTAssertEqual(mirror.entries.count, 1)
-        XCTAssertFalse(mirror.entries.contains { $0.id == e1.id })
+        XCTAssertEqual(ClipboardMirrorStore(defaults: defaults).entries.count, 1)
+        XCTAssertFalse(ClipboardMirrorStore(defaults: defaults).entries.contains { $0.id == e1.id })
 
         // Re-merge the full snapshot; the hidden id stays hidden.
         let visible = mirror.merge([e1, e2])
@@ -109,7 +110,7 @@ final class ClipboardHistoryTests: XCTestCase {
         let e2 = ClipboardEntry(text: "B", createdAt: Date())
         mirror.merge([e1, e2])
         mirror.clear()
-        XCTAssertTrue(mirror.entries.isEmpty)
+        XCTAssertTrue(ClipboardMirrorStore(defaults: defaults).entries.isEmpty)
         // After clear, re-pushing the same entries should still yield nothing.
         let visible = mirror.merge([e1, e2])
         XCTAssertTrue(visible.isEmpty)
