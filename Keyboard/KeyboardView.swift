@@ -86,6 +86,22 @@ struct KeyboardView: View {
             Spacer(minLength: 4)
             if let review = model.correctionReview, let reviewID = model.correctionReviewID, model.canSwitchPage {
                 correctionReviewContent(review, reviewID: reviewID)
+            } else if model.heldResult != nil, let recoveryID = model.heldRecoveryID, model.canSwitchPage {
+                VStack(spacing: 8) {
+                    Text("结果已保留，请确认当前输入框")
+                        .font(.caption)
+                        .multilineTextAlignment(.center)
+                    Button("插入当前输入框") { model.insertHeldResult(recoveryID: recoveryID) }
+                        .font(.subheadline.weight(.semibold))
+                        .frame(minHeight: 44)
+                        .accessibilityIdentifier("voice.insertHeldResult")
+                    Text("可能与开始录音时的输入框不同")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    if let feedback = model.recoveryFeedback {
+                        Text(feedback).font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
             } else if privateReferences.isOpen && model.canSwitchPage {
                 privateReferenceContent
             } else if translation.showPreview && model.canSwitchPage {
@@ -128,6 +144,8 @@ struct KeyboardView: View {
                 if let queue = model.queueText {
                     if model.isProcessing { ProgressView().controlSize(.mini) }
                     Text(queue)
+                } else if let feedback = model.recoveryFeedback {
+                    Text(feedback)
                 } else {
                     Text("左右滑动可打字修正")
                 }
@@ -262,8 +280,8 @@ struct KeyboardView: View {
             .accessibilityLabel("处理模式：\(model.polishEnabled ? model.polishMode.displayName : "原文")")
 
             Menu {
-                if model.heldResult != nil {
-                    Button("将保留结果插入当前输入框") { model.insertHeldResult() }
+                if model.heldResult != nil, let recoveryID = model.heldRecoveryID {
+                    Button("将保留结果插入当前输入框") { model.insertHeldResult(recoveryID: recoveryID) }
                 } else if let text = model.lastDeliveredText, !text.isEmpty {
                     Button("插入最近结果（可能重复）") { onInsert(text) }
                     Button("复制最近结果") { model.copyLastDeliveredText() }

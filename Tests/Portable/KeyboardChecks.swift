@@ -603,18 +603,51 @@ actor PortableTranslationProvider: TextTranslating {
         let heldJobs = await focusBridge.jobCount()
         check(focusResults.isEmpty && focusModel.heldResult == "旧字段语音" && heldJobs == 1,
               "ordinary dictation holds old-field result and does not consume the next segment")
-        let reconstructedKeyboard = KeyboardViewModel(client: focusBridge, defaults: focusDefaults)
+        let reconstructedKeyboard = KeyboardViewModel(client: MockKeyboardBridge(), defaults: focusDefaults)
         check(reconstructedKeyboard.heldResult == "旧字段语音", "held dictation survives keyboard reconstruction")
+        reconstructedKeyboard.appear()
+        reconstructedKeyboard.canExplicitlyInsert = { true }
+        var reopenedInsertions: [String] = []
+        reconstructedKeyboard.onTextReady = { reopenedInsertions.append($0) }
+        let oldAppearanceID = reconstructedKeyboard.heldRecoveryID!
+        reconstructedKeyboard.disconnect(); reconstructedKeyboard.appear()
+        reconstructedKeyboard.insertHeldResult(recoveryID: oldAppearanceID)
+        check(reopenedInsertions.isEmpty && reconstructedKeyboard.heldResult == "旧字段语音" &&
+              reconstructedKeyboard.recoveryFeedback?.contains("过期") == true,
+              "a callback from an old appearance is rejected and retains the result")
         focusModel.canExplicitlyInsert = { false }
-        focusModel.insertHeldResult()
-        check(focusModel.heldResult == "旧字段语音" && focusResults.isEmpty, "unavailable foreground keeps held dictation intact")
+        let firstRecoveryID = focusModel.heldRecoveryID!
+        focusModel.insertHeldResult(recoveryID: firstRecoveryID)
+        focusModel.insertHeldResult(recoveryID: firstRecoveryID)
+        check(focusModel.heldResult == "旧字段语音" && focusResults.isEmpty &&
+              focusModel.recoveryFeedback?.contains("结果仍保留") == true,
+              "repeated rejected recovery preserves text and explains failure")
+        let stillHeldJobs = await focusBridge.jobCount()
+        check(stillHeldJobs == 1, "refused recovery cannot release the next segment")
         focusModel.canExplicitlyInsert = { true }
-        focusModel.insertHeldResult()
+        focusModel.onTextReady = nil
+        focusModel.insertHeldResult(recoveryID: firstRecoveryID)
+        check(focusModel.heldResult == "旧字段语音" && focusResults.isEmpty &&
+              focusModel.recoveryFeedback?.contains("结果仍保留") == true,
+              "missing insertion callback is reported without consuming the result")
+        focusModel.onTextReady = { focusResults.append($0) }
+        focusModel.insertHeldResult(recoveryID: firstRecoveryID)
         await pause(400)
         check(focusResults == ["旧字段语音"] && focusModel.heldResult == "后一段语音",
               "explicit recovery releases the next held segment in order")
-        focusModel.insertHeldResult()
+        focusModel.insertHeldResult(recoveryID: firstRecoveryID)
+        check(focusResults == ["旧字段语音"] && focusModel.heldResult == "后一段语音" &&
+              focusModel.recoveryFeedback?.contains("过期") == true,
+              "repeated first action cannot consume the next held segment")
+        let secondRecoveryID = focusModel.heldRecoveryID!
+        focusModel.insertHeldResult(recoveryID: secondRecoveryID)
         check(focusResults == ["旧字段语音", "后一段语音"], "explicit recovery preserves segment order")
+        check(focusModel.recoveryFeedback?.contains("已提交插入") == true &&
+              focusModel.recoveryFeedback?.contains("无法确认") == true,
+              "success acknowledges submission without claiming host receipt")
+        focusModel.insertHeldResult(recoveryID: secondRecoveryID)
+        check(focusResults.count == 2 && focusModel.recoveryFeedback?.contains("已处理") == true,
+              "an already-consumed result cannot be inserted twice")
         focusModel.disconnect()
 
         let blockedBridge = MockKeyboardBridge()

@@ -66,6 +66,8 @@ final class KeyboardViewModel: ObservableObject {
     @Published private(set) var correctionManualText = ""
     @Published private(set) var placeReview: PlaceReviewDraft?
     @Published private(set) var heldResult: String?
+    @Published private(set) var heldRecoveryID: UUID?
+    @Published private(set) var recoveryFeedback: String?
     /// Called only for jobs committed in the current keyboard appearance.
     /// UITextDocumentProxy has no insertion acknowledgement; retain every result first.
     var onTextReady: ((String) -> Void)?
@@ -77,6 +79,7 @@ final class KeyboardViewModel: ObservableObject {
         self.defaults = defaults
         lastDeliveredText = defaults.string(forKey: "keyboard_last_result_v1")
         heldResult = defaults.string(forKey: "keyboard_held_result_v1")
+        if heldResult != nil { heldRecoveryID = UUID() }
         if let original = defaults.string(forKey: "keyboard_correction_review_v1") {
             var review = CorrectionReviewState(); let token = review.begin(original: original)
             _ = review.acceptProposal(CorrectionReviewProposal.make(original: original), token: token)
@@ -128,6 +131,8 @@ final class KeyboardViewModel: ObservableObject {
     }
 
     func disconnect() {
+        if heldResult != nil { heldRecoveryID = UUID() }
+        recoveryFeedback = nil
         // A confirmation belongs to this keyboard appearance. Reconstruct the
         // pending review from the retained received text and invalidate old UI
         // callbacks; the original field is not assumed to remain focused.
@@ -469,16 +474,35 @@ final class KeyboardViewModel: ObservableObject {
         guard !text.isEmpty else { return }
         receiveResult(text, autoInsert: false)
         heldResult = text
+        heldRecoveryID = UUID()
+        recoveryFeedback = nil
         defaults.set(text, forKey: "keyboard_held_result_v1")
         statusText = "输入位置无法确认 · 结果已保留，请主动恢复"
         queueText = "待处理保留结果 · 后续结果按序等待"
     }
 
-    func insertHeldResult() {
-        guard visible, canExplicitlyInsert?() == true, let text = heldResult, let insert = onTextReady else { return }
+    func insertHeldResult(recoveryID: UUID) {
+        guard let text = heldResult else {
+            recoveryFeedback = "结果已处理或不再可用。"
+            return
+        }
+        guard heldRecoveryID == recoveryID else {
+            recoveryFeedback = "操作已过期，请使用当前显示的按钮。"
+            return
+        }
+        guard correctionReview == nil else {
+            recoveryFeedback = "请先完成待核对的纠字。"
+            return
+        }
+        guard visible, canExplicitlyInsert?() == true, let insert = onTextReady else {
+            recoveryFeedback = "当前无法提交插入，请打开输入框后重试。结果仍保留。"
+            return
+        }
         heldResult = nil
+        heldRecoveryID = nil
         defaults.removeObject(forKey: "keyboard_held_result_v1")
         insert(text) // Explicit user action inserts into the current field, which may differ.
+        recoveryFeedback = "已提交插入；宿主是否接收无法确认。"
         queueText = nil
         drainBufferedResults()
     }
