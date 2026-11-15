@@ -10,7 +10,7 @@ for module in Combine UIKit; do
 done
 sources=(Shared/CorrectionReview.swift Shared/PrivateReferenceIndex.swift Shared/Core/NotionPrivatePreview.swift Shared/Core/NotionSourceMetadata.swift Shared/Core/NotionHTTPTransport.swift Shared/Core/NotionImportFlow.swift Tests/Portable/PrivateIndexChecks.swift Tests/Portable/NotionPreviewChecks.swift Shared/Constants.swift Shared/VoiceKeyboardCapture.swift Shared/PlaceNameReview.swift Shared/Core/PlaceNameDictionary.swift Shared/Core/PrivateMaterialPrototype.swift Tests/Portable/MaterialChecks.swift Tests/Portable/PlaceChecks.swift Shared/Core/ClipboardHistory.swift
   Shared/Core/ChineseScriptConverter.swift Shared/Core/PolishMode.swift Shared/Core/OrderedDeliveryCursor.swift
-  Shared/Core/SpokenCorrection.swift Shared/Core/FaithfulTextFormatter.swift Shared/Core/LocalTextProcessor.swift Shared/Core/TextPolishing.swift
+  Shared/Core/SpokenCorrection.swift Shared/Core/FaithfulTextFormatter.swift Shared/Core/LocalTextProcessor.swift Shared/Core/ModelConnectionDiagnostics.swift Shared/Core/TextPolishing.swift
   Tests/Portable/ContentChecks.swift
   Shared/TranslationDraft.swift Shared/TranslationDeliveryGuard.swift Shared/TranslationContentGuard.swift Shared/TranslationRequestExecutor.swift Keyboard/TranslationViewModel.swift Keyboard/BridgeTranslationService.swift Keyboard/PrivateReferenceSearchModel.swift
   Shared/Protocol/WireMessage.swift Keyboard/KeyboardBridgeClient.swift Keyboard/KeyboardViewModel.swift

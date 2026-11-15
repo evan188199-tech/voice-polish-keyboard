@@ -2,6 +2,42 @@ import XCTest
 import AVFoundation
 @testable import VoicePolishApp
 
+private final class ModelProbeURLProtocol: URLProtocol, @unchecked Sendable {
+    enum Mode { case success, http(Int), timeout, network }
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var mode: Mode = .success
+    nonisolated(unsafe) private static var count = 0
+    nonisolated(unsafe) private static var timeout: TimeInterval = 0
+    nonisolated(unsafe) private static var path = ""
+    static func configure(_ value: Mode) { lock.withLock { mode = value; count = 0; timeout = 0; path = "" } }
+    static func snapshot() -> (count: Int, timeout: TimeInterval, path: String) {
+        lock.withLock { (count, timeout, path) }
+    }
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let current = Self.lock.withLock { () -> Mode in
+            Self.count += 1; Self.timeout = request.timeoutInterval; Self.path = request.url?.path ?? ""
+            return Self.mode
+        }
+        switch current {
+        case .timeout:
+            client?.urlProtocol(self, didFailWithError: URLError(.timedOut))
+        case .network:
+            client?.urlProtocol(self, didFailWithError: NSError(domain: NSURLErrorDomain, code: NSURLErrorCannotConnectToHost,
+                userInfo: [NSLocalizedDescriptionKey: "fictional-private-response fixture-key"]))
+        case .success, .http:
+            let status: Int
+            if case .http(let code) = current { status = code } else { status = 200 }
+            let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: [:])!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            let body = status == 200 ? #"{"choices":[{"finish_reason":"stop","message":{"content":"ok"}}]}"# : "fictional-private-response fixture-key"
+            client?.urlProtocol(self, didLoad: Data(body.utf8)); client?.urlProtocolDidFinishLoading(self)
+        }
+    }
+    override func stopLoading() {}
+}
+
 final class VoicePolishKeyboardTests: XCTestCase {
     func testBuildTokenStableAndValid() {
         let a = BuildToken.generate()
@@ -251,7 +287,7 @@ final class VoicePolishKeyboardTests: XCTestCase {
         XCTAssertEqual(AppConstants.absoluteMaxRecordingDuration, 90)
         XCTAssertEqual(AppConstants.polishingTimeout, 8)
         XCTAssertEqual(AppConstants.bridgePorts.count, 3)
-        XCTAssertEqual(AppConstants.polishingProbeTimeout, 5)
+        XCTAssertEqual(AppConstants.polishingProbeTimeout, 10)
     }
 
     func testPolishSettingsNormalizeURL() {
@@ -326,6 +362,53 @@ final class VoicePolishKeyboardTests: XCTestCase {
         XCTAssertTrue(message.contains("地址") || message.contains("无效"))
     }
 
+    func testModelProbeUsesFixtureSessionAndRedactsFailures() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [ModelProbeURLProtocol.self]
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+        let polisher = APITextPolisher(session: session)
+        let settings = PolishingSettings(baseURL: "https://example.invalid", modelName: "fixture-model", apiKey: "fixture-key", timeout: 5)
+        for code in [400, 401, 403, 429, 500] {
+            ModelProbeURLProtocol.configure(.http(code))
+            let result = await polisher.testAvailability(settings: settings)
+            XCTAssertFalse(result.isSuccess)
+            XCTAssertTrue(result.message.contains("\(code)"))
+            XCTAssertFalse(result.message.contains("fictional-private-response"))
+            XCTAssertFalse(result.message.contains("fixture-key"))
+        }
+        ModelProbeURLProtocol.configure(.timeout)
+        let timeout = await polisher.testAvailability(settings: settings)
+        XCTAssertFalse(timeout.isSuccess)
+        XCTAssertTrue(timeout.message.contains("超时"))
+        ModelProbeURLProtocol.configure(.network)
+        let network = await polisher.testAvailability(settings: settings)
+        XCTAssertFalse(network.message.contains("fictional-private-response"))
+        XCTAssertFalse(network.message.contains("fixture-key"))
+        ModelProbeURLProtocol.configure(.success)
+        let success = await polisher.testAvailability(settings: settings)
+        XCTAssertTrue(success.isSuccess)
+        let observed = ModelProbeURLProtocol.snapshot()
+        XCTAssertEqual(observed.count, 1)
+        XCTAssertEqual(observed.timeout, 10)
+        XCTAssertEqual(observed.path, "/v1/chat/completions")
+    }
+
+    func testModelProbeRejectsUnsafeAddressBeforeTransport() async {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [ModelProbeURLProtocol.self]
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+        let polisher = APITextPolisher(session: session)
+        for address in ["http://example.invalid", "https://user:secret@example.invalid", "https://example.invalid/?token=secret"] {
+            ModelProbeURLProtocol.configure(.success)
+            let result = await polisher.testAvailability(settings: .init(baseURL: address, modelName: "fixture", apiKey: "fixture"))
+            XCTAssertFalse(result.isSuccess)
+            XCTAssertEqual(ModelProbeURLProtocol.snapshot().count, 0)
+            XCTAssertFalse(result.message.contains("secret"))
+        }
+    }
+
     func testPolishEnabledDefaultTrue() {
         let defaults = UserDefaults.standard
         let previous = defaults.object(forKey: "polish_enabled")
@@ -369,14 +452,17 @@ final class VoicePolishKeyboardTests: XCTestCase {
         XCTAssertTrue(APITextPolisher.hasChatChoices(in: nullish))
     }
 
-    func testUnsupportedModelErrorMessage() {
+    func testHTTPErrorDescriptionDoesNotExposeResponse() {
         let error = PolishingError.httpError(
             400,
             #"{"error":{"type":"server_error","message":"Error from provider (Console Go): Upstream request failed: [400] Unsupported model mimo-v2-omni"}}"#
         )
         let message = error.errorDescription ?? ""
-        XCTAssertTrue(message.contains("不被此接口支持") || message.contains("Unsupported model"))
-        XCTAssertTrue(message.contains("mimo-v2-omni") || message.contains("mimo-v2.5"))
+        XCTAssertTrue(message.contains("400"))
+        XCTAssertFalse(message.contains("Unsupported model"))
+        XCTAssertFalse(message.contains("mimo-v2-omni"))
+        XCTAssertFalse(String(describing: error).contains("mimo-v2-omni"))
+        XCTAssertFalse(String(reflecting: error).contains("mimo-v2-omni"))
     }
 
     func testPolishProfilesSaveAndSwitch() {

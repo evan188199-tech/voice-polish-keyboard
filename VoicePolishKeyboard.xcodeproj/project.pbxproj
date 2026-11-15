@@ -57,6 +57,7 @@
 		7E9636BB5DD821C419958E1A /* TranslationDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77980685C71555B056B05581 /* TranslationDraft.swift */; };
 		7EEBE20DBAF48FBF6DA10519 /* ClipboardHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABEE5CAD724D4DDF4085D913 /* ClipboardHistoryView.swift */; };
 		8249E7DF06A518EB4031B994 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEC4A3C7E7946CFC78C2953B /* SettingsView.swift */; };
+		8390910B4EFBDD2DEEE95D72 /* ModelConnectionDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30F8B924078A40B4BECDC602 /* ModelConnectionDiagnostics.swift */; };
 		893507059E031AE77E3FB709 /* PrivateMaterialPrototype.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A2338557B1E88199A69C546 /* PrivateMaterialPrototype.swift */; };
 		8E7E2AC8EFD3899B533B42D2 /* DeleteRepeatController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F889D99651360D99CBF82D6 /* DeleteRepeatController.swift */; };
 		8E946E46938201A2FCFA8FAA /* ClipboardHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75774F5FC162819FC6CF6D23 /* ClipboardHistory.swift */; };
@@ -157,6 +158,7 @@
 		294377F6454820CF3382DFEE /* ClipboardCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardCapture.swift; sourceTree = "<group>"; };
 		296D0CAEBFAB507176B3120D /* KeyboardBridgeServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardBridgeServer.swift; sourceTree = "<group>"; };
 		2F06B25CDB281F462E97C308 /* CorrectionReview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CorrectionReview.swift; sourceTree = "<group>"; };
+		30F8B924078A40B4BECDC602 /* ModelConnectionDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelConnectionDiagnostics.swift; sourceTree = "<group>"; };
 		317BBECD25CF92A53F75A1E7 /* PlaceNameReview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaceNameReview.swift; sourceTree = "<group>"; };
 		3305F071C6EEA40A03F26942 /* PolishMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PolishMode.swift; sourceTree = "<group>"; };
 		348487EA5F9FED773BA465AD /* PlaceNameDictionaryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaceNameDictionaryView.swift; sourceTree = "<group>"; };
@@ -303,6 +305,7 @@
 				403DEF05BE6CDDD9D792F48E /* FaithfulTextFormatter.swift */,
 				296D0CAEBFAB507176B3120D /* KeyboardBridgeServer.swift */,
 				74BF38A2C1A016749A3294DE /* LocalTextProcessor.swift */,
+				30F8B924078A40B4BECDC602 /* ModelConnectionDiagnostics.swift */,
 				09CE63425B407FAFC444E689 /* NotionHTTPTransport.swift */,
 				867517F51A01BB0C6986170E /* NotionImportFlow.swift */,
 				2496352F8EE70E66EEFD7535 /* NotionPrivatePreview.swift */,
@@ -553,6 +556,7 @@
 				7113B7EC19A2CB864B69C60F /* KeyboardBridgeServer.swift in Sources */,
 				CABEF0C3D2034201AE11C2B6 /* KeyboardGuideView.swift in Sources */,
 				B177B7736D101F78A487C7D9 /* LocalTextProcessor.swift in Sources */,
+				8390910B4EFBDD2DEEE95D72 /* ModelConnectionDiagnostics.swift in Sources */,
 				711899FC1F7D28556BA12109 /* NotionHTTPTransport.swift in Sources */,
 				F614C6B9DE87F18B4E8D61AE /* NotionImportFlow.swift in Sources */,
 				789ACCBC65BCD8B4AAAF4E54 /* NotionPrivatePreview.swift in Sources */,

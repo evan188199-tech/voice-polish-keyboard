@@ -158,8 +158,10 @@ final class APITextPolisher: TextPolishing, @unchecked Sendable {
         if settings.apiKey.isEmpty {
             return .failure("请先保存 API Key。")
         }
-        if settings.chatCompletionsURL == nil {
-            return .failure("API 地址无效，请检查设置。")
+        switch ModelConnectionDiagnostics.validateAddress(settings.baseURL) {
+        case .valid: break
+        case .insecureHTTP: return .failure(ModelConnectionDiagnostics.message(for: .insecureAddress))
+        case .invalid: return .failure(ModelConnectionDiagnostics.message(for: .invalidAddress))
         }
         if settings.modelName.isEmpty {
             return .failure("模型名称不能为空。")
@@ -186,11 +188,15 @@ final class APITextPolisher: TextPolishing, @unchecked Sendable {
             let ms = Int(Date().timeIntervalSince(started) * 1000)
             return .success(latencyMs: max(ms, 1))
         } catch let error as PolishingError {
-            return .failure(error.errorDescription ?? "测试失败。")
-        } catch let error as URLError where error.code == .timedOut {
-            return .failure("连接超时（\(Int(probeSettings.timeout)) 秒）。")
+            switch error {
+            case .httpError(let status, _): return .failure(ModelConnectionDiagnostics.message(for: .http(status: status)))
+            case .timeout: return .failure(ModelConnectionDiagnostics.message(for: .timeout))
+            case .invalidURL: return .failure(ModelConnectionDiagnostics.message(for: .invalidAddress))
+            case .missingAPIKey: return .failure("请先保存 API Key。")
+            default: return .failure(ModelConnectionDiagnostics.message(for: .unknown))
+            }
         } catch {
-            return .failure(error.localizedDescription)
+            return .failure(ModelConnectionDiagnostics.message(for: .network(error)))
         }
     }
 
@@ -411,7 +417,7 @@ final class APITextPolisher: TextPolishing, @unchecked Sendable {
     }
 }
 
-enum PolishingError: Error, LocalizedError {
+enum PolishingError: Error, LocalizedError, CustomStringConvertible, CustomDebugStringConvertible {
     case inputTooLong
     case truncatedResponse
     case contentChanged
@@ -433,48 +439,15 @@ enum PolishingError: Error, LocalizedError {
         case .noResponse: return "API 无响应。"
         case .timeout: return "API 请求超时。"
         case .missingAPIKey: return "请先保存 API Key。"
-        case .httpError(let code, let body):
-            if body.isEmpty {
-                return "API 返回错误 (\(code))。"
-            }
-            let snippet = Self.prettyErrorSnippet(body)
-            let lower = snippet.lowercased()
-            if lower.contains("unsupported model") {
-                return "模型不被此接口支持：\(snippet)。请改用列表中的文本模型（如 mimo-v2.5）。"
-            }
-            return "API 返回错误 (\(code))：\(snippet)"
+        case .httpError(let code, _): return ModelConnectionDiagnostics.httpMessage(code)
         case .invalidResponse: return "API 返回格式异常。"
         case .invalidAskAnswer: return "问答结果无效，请重试。"
         }
     }
 
-    private static func prettyErrorSnippet(_ body: String) -> String {
-        // Prefer nested message field when present.
-        if let data = body.data(using: .utf8),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            if let error = json["error"] as? [String: Any] {
-                let message = (error["message"] as? String)
-                    ?? (error["msg"] as? String)
-                    ?? ""
-                let type = (error["type"] as? String) ?? ""
-                let combined = [type, message].filter { !$0.isEmpty }.joined(separator: ": ")
-                if !combined.isEmpty {
-                    return clip(combined.replacingOccurrences(of: "\n", with: " "), limit: 220)
-                }
-            }
-            if let message = json["message"] as? String, !message.isEmpty {
-                return clip(message.replacingOccurrences(of: "\n", with: " "), limit: 220)
-            }
-        }
-        let flat = body
-            .replacingOccurrences(of: "\n", with: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return clip(flat, limit: 220)
-    }
+    var description: String { errorDescription ?? "API 请求失败。" }
+    var debugDescription: String { description }
 
-    private static func clip(_ text: String, limit: Int) -> String {
-        text.count > limit ? String(text.prefix(limit)) + "…" : text
-    }
 }
 
 /// Internal ask-mode envelope helpers: parse `{"answer":"..."}` (or plain text fallback).

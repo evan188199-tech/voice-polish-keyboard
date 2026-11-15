@@ -353,7 +353,15 @@ struct SettingsView: View {
             apiKey: settings.apiKey ?? "",
             timeout: AppConstants.polishingProbeTimeout
         )
+        let profileID = settings.activePolishProfileID
         let result = await APITextPolisher().testAvailability(settings: probe)
+        guard !isDirty, settings.activePolishProfileID == profileID,
+              settings.baseURL == probe.baseURL, settings.modelName == probe.modelName,
+              (settings.apiKey ?? "") == probe.apiKey else {
+            testMessage = "配置已变化，请保存后重新测试。"
+            testSucceeded = false
+            return
+        }
         testMessage = result.message
         testSucceeded = result.isSuccess
     }
