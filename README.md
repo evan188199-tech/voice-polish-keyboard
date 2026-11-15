@@ -59,8 +59,10 @@
 ```bash
 cd voice-polish-keyboard
 
-# 1. 生成项目并编译安装到连接的 iPhone
-./scripts/install_device.sh
+# 1. 选择完整设备 ID，并用明确的团队和干净提交编译安装
+./scripts/install_device.sh list
+SOURCE_COMMIT="$(git rev-parse HEAD)" DEVELOPMENT_TEAM=<team-id> \
+  ./scripts/install_device.sh <device-id>
 
 # 2. 解锁 iPhone 后，启动主应用
 xcrun devicectl device process launch --device <device-id> com.voicepolish.app
@@ -69,7 +71,7 @@ xcrun devicectl device process launch --device <device-id> com.voicepolish.app
 可选：从 Mac 本地预置模型文件到手机：
 
 ```bash
-./scripts/seed_model_to_device.sh
+./scripts/seed_model_to_device.sh <device-id>
 ```
 
 ### 首次使用检查清单
