@@ -32,15 +32,31 @@ struct VocabularyView: View {
                 } header: {
                     Text("新增专有词")
                 } footer: {
-                    Text("用于本地整理与可选 API 润色提示，帮助保留产品名、人名与中英粤混合表达。")
+                    Text("英文词用于本地大小写整理；2–8 字中文词提供普通话音近候选，需确认，不自动改写，也不是声学热词。词表不会默认上传给润色服务。")
                 }
 
+                Section {
+                    Text("开启下方词条开关后，仅所选词会随以后普通润色发送至当前配置：\(settings.baseURL) / \(settings.modelName)。默认关闭；切换配置、地址或模型后须重新选择。不发送备注；不用于问答、Coding 或连接探测。")
+                        .font(.caption)
+                    Text("仅支持保守文字词条，数字/标点及可疑指令词会被排除；最多20词、400字。开关不代表声学热词生效。")
+                        .font(.caption)
+                }
                 Section("词表 (\(entries.count))") {
                     if entries.isEmpty {
                         Text("暂无词条").foregroundStyle(.secondary)
                     }
                     ForEach(entries) { entry in
-                        Text(entry.phrase)
+                        VStack(alignment: .leading) {
+                            Text(entry.phrase)
+                            Toggle("随润色发送此词", isOn: Binding(get: {
+                                entry.polishDestination == settings.vocabularyDestination
+                            }, set: { selected in
+                                guard let index = entries.firstIndex(where: { $0.id == entry.id }) else { return }
+                                entries[index].polishDestination = selected ? settings.vocabularyDestination : nil
+                                persist()
+                            }))
+                            .font(.caption)
+                        }
                     }
                     .onDelete { offsets in
                         entries.remove(atOffsets: offsets)

@@ -23,6 +23,7 @@ enum SpokenCorrection {
             return SpokenCorrectionResult(original: text, body: String(text[range]), correctedTerms: [], needsConfirmation: false)
         }
         guard !["不是", "唔係", "并非", "並非", "不要改", "唔好改"].contains(where: text.contains) else { return unchanged() }
+        if CorrectionReviewProposal.containsCharacterExplanation(text) { return unchanged(true) }
         // A plain ASR transcript cannot establish which written characters a
         // speaker intended, even when the recognized spellings differ. Do not
         // silently execute oral edit commands: retain all words for review.

@@ -9,6 +9,12 @@ struct ContentView: View {
     @State private var showGuide = false
     @State private var showClipboard = false
     @State private var showHistory = false
+    private struct ReviewRequest: Identifiable {
+        let id = UUID()
+        let original: String
+    }
+    @State private var reviewRequest: ReviewRequest?
+    @State private var reviewedDraft: String?
     @State private var modelReady = false
     @State private var activating = false
 
@@ -31,7 +37,7 @@ struct ContentView: View {
                 }
                 .padding()
             }
-            .navigationTitle("粤英语音键盘")
+            .navigationTitle("言出文随")
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     if isSessionLive {
@@ -51,6 +57,14 @@ struct ContentView: View {
             .sheet(isPresented: $showSettings) { SettingsView(settings: settings) }
             .sheet(isPresented: $showVocab) {
                 VocabularyView(settings: settings)
+            }
+            .sheet(item: $reviewRequest) { request in
+                NavigationStack {
+                    CorrectionReviewView(original: request.original, vocabulary: settings.customVocabulary,
+                        onUse: { text in reviewedDraft = text; reviewRequest = nil },
+                        onCancel: { reviewRequest = nil })
+                        .navigationTitle("核对纠字与专有词")
+                }
             }
             .sheet(isPresented: $showGuide) { KeyboardGuideView() }
             .sheet(isPresented: $showClipboard) {
@@ -77,7 +91,7 @@ struct ContentView: View {
 
     private var onboarding: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("欢迎使用粤英语音键盘", systemImage: "waveform")
+            Label("欢迎使用言出文随", systemImage: "waveform")
                 .font(.title2.bold())
             Text("点击开始说话，再次点击完成；左右滑动切换文字键盘。本机 SenseVoice 识别，可选 API 润色。")
                 .font(.subheadline)
@@ -359,14 +373,37 @@ struct ContentView: View {
                 text: coordinator.lastPolished,
                 placeholder: polishPlaceholder
             )
+            if let status = coordinator.lastPolishStatus {
+                Text(status.message).font(.caption).foregroundStyle(.secondary)
+            }
 
             if let finalText = coordinator.lastResult, !finalText.isEmpty {
-                Text("最终插入：\(finalText)")
+                Text("待使用结果：\(finalText)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
+            if let original = coordinator.lastTranscription, !original.isEmpty {
+                Button("核对纠字 / 专有词") {
+                    reviewRequest = ReviewRequest(original: original)
+                }
+                if coordinator.correctionNeedsConfirmation {
+                    Text("检测到纠字说明，请核对；不会把不确定字形当作已纠正。")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+            }
+            if let draft = reviewedDraft {
+                Text("已核对草稿（未插入其他 App）").font(.caption)
+                Text(draft).textSelection(.enabled)
+                Button("复制已核对草稿") {
+                    UIPasteboard.general.setItems([["public.utf8-plain-text": draft]],
+                        options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(120)])
+                }
+                Text("复制会把这段文字放入本机剪贴板两分钟，由你选择粘贴位置。")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
             Button("清除") {
+                reviewedDraft = nil
                 coordinator.clearResult()
             }
             .buttonStyle(.bordered)
@@ -453,16 +490,7 @@ struct ContentView: View {
     }
 
     private var polishPlaceholder: String {
-        if coordinator.lastPolishFailed {
-            return "润色失败，已使用原文"
-        }
-        if !settings.polishEnabled {
-            return "未开启润色"
-        }
-        if (settings.apiKey ?? "").isEmpty {
-            return "未配置 API Key"
-        }
-        return "未润色"
+        coordinator.lastPolishStatus?.message ?? "暂无本段润色结果"
     }
 
     private func resultBlock(title: String, text: String?, placeholder: String) -> some View {

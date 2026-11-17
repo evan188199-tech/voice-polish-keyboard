@@ -60,6 +60,14 @@ final class AppSettings: ObservableObject {
             save()
         }
     }
+    var vocabularyDestination: String {
+        [activePolishProfileID, PolishingSettings.normalizeBaseURL(baseURL), modelName].joined(separator: "|")
+    }
+    var selectedPolishVocabulary: String? {
+        let entries = VocabularyEntry.load()
+        let ids = Set(entries.filter { $0.polishDestination == vocabularyDestination }.map(\.id))
+        return PolishContextPolicy.payload(entries: entries, selectedIDs: ids)
+    }
     @Published var customVocabulary: String {
         didSet {
             guard isLoaded else { return }

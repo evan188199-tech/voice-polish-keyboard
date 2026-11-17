@@ -132,14 +132,15 @@ struct TranslationDraft: Codable, Equatable, Sendable {
         return TranslationRequest(context: context, source: source)
     }
     @discardableResult mutating func receive(_ event: TranslationEvent) -> Bool {
-        guard requestID == event.context.id, source == event.source, target == event.context.target else { return false }
+        // A request accepts exactly one terminal event. Retry must begin a new request.
+        guard isBusy, requestID == event.context.id, source == event.source, target == event.context.target else { return false }
         isBusy = false; failure = event.failure
         translation = event.isSuccess ? event.translation : nil
         previewCanInsert = event.isSuccess && event.context.deliveryMode == .preview
         return true
     }
     mutating func fail(_ reason: TranslationFailure, id: UUID?) {
-        guard id == requestID else { return }
+        guard isBusy, let id, id == requestID else { return }
         isBusy = false; failure = reason; translation = nil; previewCanInsert = false
     }
     mutating func cancel() { invalidate(); failure = .cancelled }
