@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		F01400000000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F01400000000000000000002 /* Assets.xcassets */; };
 		024ED99C76AA8A3CD78E1B4E /* AppSwitcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 978F57999CCF9070BD62CDE7 /* AppSwitcher.swift */; };
 		03DA6313FA9DEC157416C51A /* VoicePolishKeyboardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BF194F5749CC6181F849EB2 /* VoicePolishKeyboardTests.swift */; };
 		040028771CE6D4F557E78017 /* TranslationSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7651F722C72A695EB3466E16 /* TranslationSettingsView.swift */; };
@@ -141,6 +142,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		F01400000000000000000002 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		016C65BF0148E33EA696E3A0 /* OrderedDeliveryCursor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrderedDeliveryCursor.swift; sourceTree = "<group>"; };
 		05CA494D2608B995536F4DB6 /* TranslationBridgeHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationBridgeHandler.swift; sourceTree = "<group>"; };
 		066B18D1E75DAAC409FFF214 /* AppleOnDeviceTranscriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleOnDeviceTranscriber.swift; sourceTree = "<group>"; };
@@ -285,6 +287,7 @@
 		6A0484911A9957183473B5D8 /* VoicePolishApp */ = {
 			isa = PBXGroup;
 			children = (
+				F01400000000000000000002 /* Assets.xcassets */,
 				265E68080AC320E2A1ADC738 /* AppServices.swift */,
 				978F57999CCF9070BD62CDE7 /* AppSwitcher.swift */,
 				89A580E9DD9B59FA759770C8 /* Info.plist */,
@@ -458,6 +461,7 @@
 			buildConfigurationList = A3F53AAAB4E66E7C857A55F0 /* Build configuration list for PBXNativeTarget "VoicePolishApp" */;
 			buildPhases = (
 				D4F079ECDBC91B0A4FC32D48 /* Sources */,
+				F01400000000000000000003 /* Resources */,
 				1C4C4B792EB606AE14DFD965 /* Frameworks */,
 				FB934B2D784A76761EBE90B9 /* Embed Foundation Extensions */,
 			);
@@ -520,6 +524,10 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		F01400000000000000000003 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (F01400000000000000000001 /* Assets.xcassets in Resources */,); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		CD1955FD09B374425F9F62C3 /* Sources */ = {
