@@ -602,6 +602,33 @@ final class PolishResultStatusTests: XCTestCase {
         coordinator.clearResult()
         XCTAssertNil(coordinator.lastPolishStatus)
     }
+    func testLocalPunctuationDraftIsReviewOnlyAndPreservesText() {
+        let sample = "今天去公园然后到图书馆读书"
+        XCTAssertEqual(FaithfulTextFormatter.punctuationDraft(sample), sample + "。")
+        XCTAssertTrue(FaithfulTextFormatter.preservesContent(sample + "。", source: sample))
+        XCTAssertEqual(FaithfulTextFormatter.format(sample, mode: .rewrite), sample)
+        for protected in ["已有句号。", "他说“继续走”", "路径/tmp/文档", "第3项资料", "第一行\n第二行", "短句"] {
+            XCTAssertNil(FaithfulTextFormatter.punctuationDraft(protected))
+        }
+    }
+
+    func testActualPolishNetworkFailuresRemainSpecificAndRedacted() {
+        let cases: [(Int, String)] = [(-1022, "不安全连接"), (-1202, "证书"),
+            (-1009, "无法连接网络"), (-1003, "域名"), (-1004, "地址和端口"),
+            (-1005, "连接中断"), (-1001, "超时")]
+        for (code, expected) in cases {
+            let error = URLError(URLError.Code(rawValue: code), userInfo: [
+                NSURLErrorFailingURLErrorKey: URL(string: "https://private.example/secret?token=hidden")!,
+                NSLocalizedDescriptionKey: "private fixture body"])
+            let result = PolishExecutionStatus.failure(error).message
+            XCTAssertTrue(result.contains(expected), result)
+            XCTAssertTrue(result.contains("已保留本地文本"))
+            for secret in ["private.example", "token", "hidden", "private fixture"] {
+                XCTAssertFalse(result.contains(secret))
+            }
+        }
+    }
+
     func testFailureLabelsDoNotExposeProviderTextOrURLs() {
         let status = PolishExecutionStatus.failure(PolishingError.httpError(500, "secret fixture body"))
         XCTAssertFalse(status.message.contains("secret fixture"))

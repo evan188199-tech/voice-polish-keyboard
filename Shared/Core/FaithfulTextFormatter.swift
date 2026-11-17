@@ -27,6 +27,18 @@ enum FaithfulTextFormatter {
         return output
     }
 
+    /// A review-only draft, never used as an automatic replacement or cloud result.
+    /// Without pause evidence we do not infer internal sentence boundaries.
+    static func punctuationDraft(_ text: String) -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text == trimmed, text.count >= 4, !isProtected(text),
+              !text.contains("\n"),
+              let last = text.unicodeScalars.last,
+              (0x4E00...0x9FFF).contains(last.value),
+              !text.contains(where: { $0.isNumber }) else { return nil }
+        return text + "。"
+    }
+
     private static func explicitList(_ text: String) -> String? {
         let pattern = #"第([一二三四五六七八九])(點|点|件事|步|項|项)?[、，,:：\s]*"#
         let regex = try! NSRegularExpression(pattern: pattern)

@@ -640,7 +640,7 @@ enum PolishExecutionStatus: Equatable, Sendable {
         // Never expose an arbitrary provider body, URL, credential or user content.
         if let known = error as? PolishingError { return .failed(known.errorDescription ?? "服务异常") }
         if let network = error as? URLError {
-            return .failed(network.code == .timedOut ? "请求超时" : "网络请求失败")
+            return .failed(ModelConnectionDiagnostics.networkMessage(network))
         }
         return .failed("服务异常")
     }
