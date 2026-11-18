@@ -71,12 +71,14 @@ enum ModelConnectionDiagnostics {
               components.query == nil, components.fragment == nil else { return .invalid }
         guard scheme == "https" else { return .insecureHTTP }
         var path = components.percentEncodedPath
-        if path.lowercased().hasSuffix("/chat/completions") {
-            path.removeLast("/chat/completions".count)
+        if !path.lowercased().hasSuffix("/chat/completions") {
+            // Keep explicit version roots (e.g. /api/paas/v4), while preserving
+            // legacy unversioned proxy roots that expect an appended /v1.
+            let last = path.split(separator: "/").last.map(String.init) ?? ""
+            let isVersion = last.range(of: "^v[0-9]+$", options: [.regularExpression, .caseInsensitive]) != nil
+            path += isVersion ? "/chat/completions" : "/v1/chat/completions"
         }
-        if path.lowercased().hasSuffix("/v1") { path.removeLast(3) }
-        while path.hasSuffix("/") { path.removeLast() }
-        components.percentEncodedPath = path + "/v1/chat/completions"
+        components.percentEncodedPath = path
         guard let endpoint = components.url else { return .invalid }
         return .valid(endpoint)
     }

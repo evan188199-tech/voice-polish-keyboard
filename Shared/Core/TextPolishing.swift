@@ -52,12 +52,16 @@ struct PolishingSettings: Sendable {
     }
 
     /// Accepts OpenAI-style roots (`https://api.openai.com`), roots already ending in `/v1`,
-    /// or full chat-completions endpoints. Always produces a root without trailing `/v1`.
+    /// or full chat-completions endpoints. Non-v1 explicit endpoints are preserved.
     static func normalizeBaseURL(_ raw: String) -> String {
         var url = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         while url.hasSuffix("/") { url.removeLast() }
 
         let chatSuffix = "/chat/completions"
+        if url.lowercased().hasSuffix(chatSuffix), !url.lowercased().hasSuffix("/v1" + chatSuffix) {
+            // Preserve explicit non-v1 endpoints rather than inventing a /v1 path.
+            return url
+        }
         if url.lowercased().hasSuffix(chatSuffix) {
             url = String(url.dropLast(chatSuffix.count))
             while url.hasSuffix("/") { url.removeLast() }
@@ -74,15 +78,12 @@ struct PolishingSettings: Sendable {
         return url
     }
 
-    /// Requires absolute http(s) base URL with a host.
+    /// Uses the same HTTPS and credential-free URL validation as the model probe.
     var chatCompletionsURL: URL? {
-        guard !baseURL.isEmpty else { return nil }
-        guard let url = URL(string: "\(baseURL)/v1/chat/completions") else { return nil }
-        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
-            return nil
+        if case .valid(let endpoint) = ModelConnectionDiagnostics.validateAddress(baseURL) {
+            return endpoint
         }
-        guard url.host != nil else { return nil }
-        return url
+        return nil
     }
 }
 

@@ -10,6 +10,13 @@ struct Checks {
         for address in ["https://example.invalid", "https://example.invalid/v1/", "https://example.invalid/v1/chat/completions"] {
             precondition(ModelConnectionDiagnostics.validateAddress(address) == .valid(expected))
         }
+        for (input, output) in [
+            ("https://example.invalid/api/paas/v4", "https://example.invalid/api/paas/v4/chat/completions"),
+            ("https://example.invalid/custom/chat/completions/", "https://example.invalid/custom/chat/completions"),
+            ("https://example.invalid/proxy", "https://example.invalid/proxy/v1/chat/completions")
+        ] {
+            precondition(ModelConnectionDiagnostics.validateAddress(input) == .valid(URL(string: output)!))
+        }
         precondition(ModelConnectionDiagnostics.validateAddress("http://example.invalid") == .insecureHTTP)
         for address in ["", "ftp://example.invalid", "https://user:secret@example.invalid", "https://example.invalid/?token=secret", "https://example.invalid/#fragment"] {
             precondition(ModelConnectionDiagnostics.validateAddress(address) == .invalid)

@@ -332,6 +332,24 @@ final class VoicePolishKeyboardTests: XCTestCase {
         )
     }
 
+    func testPolishEndpointPreservesVersionsAndExplicitPaths() {
+        let pairs = [
+            ("https://example.invalid/api/paas/v4", "https://example.invalid/api/paas/v4/chat/completions"),
+            ("https://example.invalid/custom/chat/completions/", "https://example.invalid/custom/chat/completions"),
+            ("https://example.invalid/proxy/v2/chat/completions", "https://example.invalid/proxy/v2/chat/completions"),
+            ("https://example.invalid/proxy", "https://example.invalid/proxy/v1/chat/completions")
+        ]
+        for (input, expected) in pairs {
+            let settings = PolishingSettings(baseURL: input, modelName: "fixture", apiKey: "fixture")
+            XCTAssertEqual(settings.chatCompletionsURL?.absoluteString, expected)
+            XCTAssertEqual(ModelConnectionDiagnostics.validateAddress(settings.baseURL), .valid(URL(string: expected)!))
+            XCTAssertEqual(PolishingSettings.normalizeBaseURL(settings.baseURL), settings.baseURL)
+        }
+        for input in ["http://example.invalid", "https://user:secret@example.invalid", "https://example.invalid/?key=secret"] {
+            XCTAssertNil(PolishingSettings(baseURL: input, modelName: "fixture", apiKey: "fixture").chatCompletionsURL)
+        }
+    }
+
     func testPolishAvailabilityRejectsEmptyKey() async {
         let polisher = APITextPolisher()
         let settings = PolishingSettings(
