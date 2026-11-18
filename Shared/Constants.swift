@@ -3,7 +3,8 @@ import Foundation
 enum AppConstants {
     static let protocolVersion: UInt16 = 3
     static let bridgePorts: [UInt16] = [52741, 52742, 52743]
-    static let polishingTimeout: TimeInterval = 8
+    static let polishingTimeout: TimeInterval = 20
+    static let askTimeout: TimeInterval = 30
     /// Short timeout used by settings "test model" probe.
     static let polishingProbeTimeout: TimeInterval = 10
     static let buildTokenSalt: String = "vpk.loopback.2026"

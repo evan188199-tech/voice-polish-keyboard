@@ -26,6 +26,47 @@ struct PlaceNameSuggestion: Identifiable, Codable, Equatable, Sendable {
 }
 
 enum PlaceNameMatcher {
+    /// Local Mandarin transliteration candidates, not acoustic hotwords or automatic edits.
+    /// Only the user's explicit short Chinese terms are considered; none leave the device.
+    static func vocabularySuggestions(in text: String, vocabulary: String, script: ChineseScriptPreference) -> [PlaceNameSuggestion] {
+        guard text.count <= 1000, !FaithfulPlaceProtection.isProtected(text) else { return [] }
+        func chinese(_ value: String) -> Bool {
+            !value.isEmpty && value.unicodeScalars.allSatisfy { (0x4E00...0x9FFF).contains($0.value) }
+        }
+        var readings: [Character: String] = [:]
+        func sound(_ value: String) -> String {
+            value.map { character in
+                if let known = readings[character] { return known }
+                let reading = (String(character).applyingTransform(.toLatin, reverse: false) ?? String(character))
+                    .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+                    .filter { $0.isASCII && $0.isLetter }
+                readings[character] = reading
+                return reading
+            }.joined()
+        }
+        let terms = Array(Set(vocabulary.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { (2...8).contains($0.count) && chinese($0) })).sorted().prefix(128)
+        let characters = Array(text)
+        var offsets = [0]
+        for character in characters { offsets.append(offsets.last! + String(character).utf16.count) }
+        var output: [PlaceNameSuggestion] = []
+        for term in terms where term.count <= characters.count {
+            let replacement = ChineseScriptConverter.convert(term, direction: script.conversionDirection)
+            let phonetic = sound(term)
+            guard !phonetic.isEmpty else { continue }
+            for start in 0...(characters.count - term.count) {
+                let original = String(characters[start..<(start + term.count)])
+                guard chinese(original), original != replacement, original != term,
+                      sound(original) == phonetic else { continue }
+                output.append(PlaceNameSuggestion(location: offsets[start], length: offsets[start + term.count] - offsets[start],
+                    original: original, replacement: replacement, region: "本地专有词 · 普通话音近候选", confirmedEntry: false))
+                if output.count >= 32 { return output }
+            }
+        }
+        return output
+    }
+
     static func suggestions(in text: String, entries: [PlaceNameEntry], script: ChineseScriptPreference) -> [PlaceNameSuggestion] {
         guard !FaithfulPlaceProtection.isProtected(text) else { return [] }
         let enabled = entries.filter(\.isEnabled).sorted { lhs, rhs in

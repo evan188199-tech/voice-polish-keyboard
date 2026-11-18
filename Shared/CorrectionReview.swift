@@ -14,6 +14,7 @@ struct CorrectionReviewProposal: Equatable, Sendable {
     /// an unmarked result is safe, or reconstruct earlier raw transcription.
     static func mayNeedReview(_ text: String) -> Bool {
         guard !isProtected(text) else { return false }
+        if containsCharacterExplanation(text) { return true }
         let direct = #"(?:^|[，,。；;]\s*)(?:把|将|將)[\p{Han}A-Za-z]{1,8}(?:改成|改为|改為|改做)[\p{Han}A-Za-z]{1,8}[。.!！]?\s*$"#
         if text.range(of: direct, options: .regularExpression) != nil { return true }
         let spelling = try! NSRegularExpression(pattern: #"(?:^|[，,。；;]\s*)([\p{Han}A-Za-z]{1,8})(?:是|係|系)([\p{Han}A-Za-z]{2,16})(?:的|嘅)([\p{Han}A-Za-z]{1,8})[。.!！]?\s*$"#)
@@ -23,6 +24,11 @@ struct CorrectionReviewProposal: Equatable, Sendable {
         let target = String(text[a]), example = String(text[b]), alternative = String(text[c])
         return target.count == alternative.count && example.contains(alternative)
 
+    }
+    static func containsCharacterExplanation(_ text: String) -> Bool {
+        guard !isProtected(text) else { return false }
+        return text.range(of: #"(?:草字[头頭]|[山木口土金女言]字旁|三[点點字]旁|三[点點]水|(?:下面|右[边邊])(?:有|是)?一[个個][\p{Han}]{2,8}(?:的|嘅)[\p{Han}])"#, options: .regularExpression) != nil
+            || text.range(of: #"(?:^|[，,。；;]|一[个個]|是|係)[\p{Han}]{2,8}(?:的|嘅)[\p{Han}][。.!！]?\s*$"#, options: .regularExpression) != nil
     }
     private static func isProtected(_ text: String) -> Bool {
         text.contains("`") || text.contains("/") || text.contains("\\") || text.contains("{") || text.contains("}") || text.contains("=") || text.contains("\"") || text.contains("'") || text.contains("“") || text.contains("「") || text.contains("『")

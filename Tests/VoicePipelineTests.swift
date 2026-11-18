@@ -86,12 +86,16 @@ final class VoicePipelineTests: XCTestCase {
         let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let fixture = documents.appendingPathComponent("VoiceModelFixture", isDirectory: true)
         let audio = fixture.appendingPathComponent("fixture.pcm")
+        // Explicit synthetic audio is required. Reuse an already-installed model
+        // read-only rather than duplicating 226 MB in the device container.
+        let modelDirectory = FileManager.default.fileExists(atPath: fixture.appendingPathComponent("model.int8.onnx").path)
+            ? fixture : SenseVoiceTranscriber.defaultModelDirectory()
         guard FileManager.default.fileExists(atPath: audio.path),
-              FileManager.default.fileExists(atPath: fixture.appendingPathComponent("model.int8.onnx").path),
-              FileManager.default.fileExists(atPath: fixture.appendingPathComponent("tokens.txt").path) else {
-            throw XCTSkip("Synthetic offline fixture was not installed")
+              FileManager.default.fileExists(atPath: modelDirectory.appendingPathComponent("model.int8.onnx").path),
+              FileManager.default.fileExists(atPath: modelDirectory.appendingPathComponent("tokens.txt").path) else {
+            throw XCTSkip("Synthetic audio or an installed local model is missing; no download is allowed")
         }
-        let transcriber = SenseVoiceTranscriber(modelDir: fixture)
+        let transcriber = SenseVoiceTranscriber(modelDir: modelDirectory)
         let start = Date()
         try await transcriber.prepareModel()
         print("OFFLINE_SMOKE model_load_seconds=\(Date().timeIntervalSince(start))")
@@ -395,5 +399,240 @@ final class VoicePipelineTests: XCTestCase {
         let payload = String(data: try! JSONEncoder().encode(event), encoding: .utf8) ?? ""
         XCTAssertFalse(payload.contains("transcript"))
         XCTAssertFalse(payload.contains("audio"))
+    }
+}
+
+
+final class PolishDeadlineTests: XCTestCase {
+    func testTimeoutDoesNotWaitForCancellationIgnoringProvider() async throws {
+        let started = ContinuousClock.now
+        do {
+            _ = try await PolishDeadline.run(seconds: 0.02) {
+                await withCheckedContinuation { continuation in
+                    DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) {
+                        continuation.resume(returning: "late result")
+                    }
+                }
+            }
+            XCTFail("Expected deadline")
+        } catch PolishingError.timeout {} catch { XCTFail("Unexpected error: \(error)") }
+        XCTAssertLessThan(started.duration(to: .now), .milliseconds(250))
+        try await Task.sleep(nanoseconds: 350_000_000) // late completion must not resume twice
+    }
+    func testCancellationReturnsBeforeUncooperativeProvider() async throws {
+        let task = Task {
+            try await PolishDeadline.run(seconds: 1) {
+                await withCheckedContinuation { continuation in
+                    DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) {
+                        continuation.resume(returning: "late")
+                    }
+                }
+            }
+        }
+        try await Task.sleep(nanoseconds: 10_000_000)
+        let started = ContinuousClock.now
+        task.cancel()
+        do { _ = try await task.value; XCTFail("Expected cancellation") }
+        catch is CancellationError {} catch { XCTFail("Unexpected error: \(error)") }
+        XCTAssertLessThan(started.duration(to: .now), .milliseconds(250))
+        try await Task.sleep(nanoseconds: 350_000_000)
+    }
+    func testSuccessAndFailureAreNotReplacedByDeadline() async throws {
+        let result = try await PolishDeadline.run(seconds: 1) { "success" }
+        XCTAssertEqual(result, "success")
+        do {
+            _ = try await PolishDeadline<String>.run(seconds: 1) { throw PolishingError.noResponse }
+            XCTFail("Expected provider failure")
+        } catch PolishingError.noResponse {} catch { XCTFail("Unexpected error: \(error)") }
+    }
+    func testRequestBudgetsAreDistinctAndExplicitProbeRemainsShort() {
+        func settings(_ mode: PolishMode, _ timeout: TimeInterval? = nil) -> PolishingSettings {
+            PolishingSettings(baseURL: "https://example.com", modelName: "fixture", apiKey: "fixture", timeout: timeout, mode: mode)
+        }
+        XCTAssertEqual(settings(.default).timeout, 20)
+        XCTAssertEqual(settings(.askLLM).timeout, 30)
+        XCTAssertEqual(settings(.default, 10).timeout, 10)
+        XCTAssertEqual(settings(.default, .infinity).timeout, 20)
+        XCTAssertEqual(settings(.default, -1).timeout, 20)
+        XCTAssertEqual(settings(.default, 1000).timeout, 60)
+    }
+}
+
+
+private actor SuspendedPolisher: TextPolishing {
+    private var waits: [String: CheckedContinuation<String, Error>] = [:]
+    func polish(_ raw: String, settings: PolishingSettings) async throws -> String {
+        try await withCheckedThrowingContinuation { waits[raw] = $0 }
+    }
+    func started(_ text: String) -> Bool { waits[text] != nil }
+    func finish(_ text: String) { waits.removeValue(forKey: text)?.resume(returning: text) }
+}
+
+final class PolishSessionIsolationTests: XCTestCase {
+    @MainActor func testLateOldSessionCannotPublishOrReleaseNewCapacity() async throws {
+        let suite = "polish-isolation-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let provider = SuspendedPolisher()
+        let coordinator = VoiceSessionCoordinator(polisher: provider, historyStore: DictationHistoryStore(defaults: defaults))
+        _ = coordinator.enqueuePolishTestText("old")
+        for _ in 0..<100 { if await provider.started("old") { break }; try await Task.sleep(nanoseconds: 5_000_000) }
+        let oldStarted = await provider.started("old")
+        XCTAssertTrue(oldStarted)
+        coordinator.deactivate()
+        let newID = coordinator.enqueuePolishTestText("new")
+        for _ in 0..<100 { if await provider.started("new") { break }; try await Task.sleep(nanoseconds: 5_000_000) }
+        await provider.finish("old")
+        try await Task.sleep(nanoseconds: 30_000_000)
+        XCTAssertEqual(coordinator.polishingCountForTesting, 1)
+        XCTAssertNil(coordinator.lastResult)
+        await provider.finish("new")
+        for _ in 0..<100 { if coordinator.lastResult == "new" { break }; try await Task.sleep(nanoseconds: 5_000_000) }
+        XCTAssertEqual(coordinator.lastResult, "new")
+        XCTAssertEqual(coordinator.polishingCountForTesting, 0)
+        XCTAssertEqual(coordinator.takeBridgeOutcome(jobID: newID).outcome, .text("new"))
+        XCTAssertNotEqual(coordinator.takeBridgeOutcome(jobID: newID).outcome, .text("new"))
+    }
+    @MainActor func testFailurePreservesDictationButNeverCallsQuestionAnAnswer() async throws {
+        let suite = "polish-fallback-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let coordinator = VoiceSessionCoordinator(polisher: FixturePolisher(), historyStore: DictationHistoryStore(defaults: defaults))
+        let dictation = coordinator.enqueuePolishTestText("触发失败")
+        for _ in 0..<100 { if coordinator.lastPolishFailed { break }; try await Task.sleep(nanoseconds: 5_000_000) }
+        XCTAssertTrue(coordinator.lastPolishFailed)
+        XCTAssertNil(coordinator.lastPolished)
+        XCTAssertEqual(coordinator.lastResult, "触发失败")
+        XCTAssertNotNil(coordinator.currentStatus.resultNotice)
+        XCTAssertEqual(coordinator.takeBridgeOutcome(jobID: dictation).outcome, .text("触发失败"))
+        let question = coordinator.enqueuePolishTestText("触发失败", mode: .askLLM)
+        for _ in 0..<100 { if coordinator.polishingCountForTesting == 0 { break }; try await Task.sleep(nanoseconds: 5_000_000) }
+        let outcome = coordinator.takeBridgeOutcome(jobID: question).outcome
+        if case .failed(let message) = outcome { XCTAssertTrue(message.contains("回答生成失败")) }
+        else { XCTFail("Question must fail, not become an answer: \(String(describing: outcome))") }
+    }
+}
+
+final class VocabularyCorrectionRegressionTests: XCTestCase {
+    func testChineseVocabularyProducesCandidatesWithoutAutomaticReplacement() {
+        let source = "示例路线经过焦岭。"
+        let candidates = PlaceNameMatcher.vocabularySuggestions(in: source, vocabulary: "蕉岭", script: .simplified)
+        XCTAssertEqual(candidates.map(\.replacement), ["蕉岭"])
+        var draft = PlaceReviewDraft(original: source, suggestions: candidates)
+        XCTAssertEqual(draft.text, source)
+        XCTAssertTrue(draft.confirm(candidates[0].id))
+        XCTAssertEqual(draft.text, "示例路线经过蕉岭。")
+        draft.undo()
+        XCTAssertEqual(draft.text, source)
+    }
+    func testUnrelatedFocusAndProtectedTextAreNotChanged() {
+        for text in ["焦点在这里", "我爱吃香蕉", "我家住在蕉岭", "“我家住在焦岭”", "/tmp/焦岭"] {
+            XCTAssertTrue(PlaceNameMatcher.vocabularySuggestions(in: text, vocabulary: "蕉岭", script: .simplified).isEmpty)
+        }
+    }
+    func testCandidateUTF16RangeAfterEmojiAndTraditionalChoice() {
+        let source = "🙂焦岭"
+        let candidates = PlaceNameMatcher.vocabularySuggestions(in: source, vocabulary: "蕉岭", script: .traditionalHK)
+        XCTAssertEqual(candidates.first?.location, 2)
+        XCTAssertEqual(candidates.first?.replacement, "蕉嶺")
+    }
+    func testSpokenRadicalExplanationRequiresReviewAndPreservesOriginal() {
+        for text in ["蕉是草字头下面一个焦点的焦", "示例地名是草字头下面一个蕉点的胶，另一个字是山字旁右边一个口令的令", "焦点的焦"] {
+            let result = SpokenCorrection.process(text, mode: .rewrite)
+            XCTAssertTrue(result.needsConfirmation)
+            XCTAssertEqual(result.body, text)
+            XCTAssertTrue(CorrectionReviewProposal.mayNeedReview(text))
+        }
+    }
+    func testQuotedExplanationAndCodingRemainLiteral() {
+        let quoted = "他说：“蕉是草字头下面一个焦点的焦”"
+        XCTAssertFalse(SpokenCorrection.process(quoted, mode: .rewrite).needsConfirmation)
+        XCTAssertFalse(SpokenCorrection.process("焦点的焦", mode: .coding).needsConfirmation)
+        XCTAssertFalse(SpokenCorrection.process("下面是下一项，右边有一个按钮。", mode: .rewrite).needsConfirmation)
+    }
+    @MainActor func testHistoryPersistenceUsesInjectedStoreWithoutWritingStandard() throws {
+        let name = "history-isolation-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let before = UserDefaults.standard.data(forKey: "dictation_history_v1")
+        let store = DictationHistoryStore(defaults: defaults)
+        store.append(DictationHistoryEntry(transcript: "synthetic isolation fixture", result: "fixture", mode: .rewrite))
+        XCTAssertNotNil(defaults.data(forKey: "dictation_history_v1"))
+        XCTAssertEqual(UserDefaults.standard.data(forKey: "dictation_history_v1"), before)
+        XCTAssertEqual(DictationHistoryStore(defaults: defaults).entries.count, 1)
+    }
+}
+
+private actor StatusFixturePolisher: TextPolishing {
+    private(set) var calls = 0
+    func polish(_ raw: String, settings: PolishingSettings) async throws -> String {
+        calls += 1
+        if raw == "失败样例" { throw PolishingError.timeout }
+        return raw == "更新样例" ? "更新后的样例。" : raw
+    }
+}
+final class PolishResultStatusTests: XCTestCase {
+    @MainActor func testSnapshotsDistinguishSkippedFailedUnchangedAndChanged() async throws {
+        let suite = "polish-status-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let provider = StatusFixturePolisher()
+        let coordinator = VoiceSessionCoordinator(polisher: provider, historyStore: DictationHistoryStore(defaults: defaults))
+        let disabledID = coordinator.enqueuePolishTestText("关闭样例", enabled: false)
+        XCTAssertEqual(coordinator.lastPolishStatus, .notRequested)
+        _ = coordinator.takeBridgeOutcome(jobID: disabledID)
+        let missingID = coordinator.enqueuePolishTestText("缺钥样例", key: "  ")
+        XCTAssertEqual(coordinator.lastPolishStatus, .missingConfiguration)
+        _ = coordinator.takeBridgeOutcome(jobID: missingID)
+        let skippedCalls = await provider.calls
+        XCTAssertEqual(skippedCalls, 0)
+        for (source, status, expected) in [("相同样例", PolishExecutionStatus.succeededUnchanged, "相同样例"),
+                                            ("更新样例", .succeededChanged, "更新后的样例。"),
+                                            ("失败样例", .failed("API 请求超时。"), "失败样例")] {
+            let id = coordinator.enqueuePolishTestText(source)
+            for _ in 0..<100 { if coordinator.polishingCountForTesting == 0 { break }; try await Task.sleep(nanoseconds: 5_000_000) }
+            XCTAssertEqual(coordinator.lastPolishStatus, status)
+            XCTAssertEqual(coordinator.lastResult, expected)
+            _ = coordinator.takeBridgeOutcome(jobID: id)
+        }
+        XCTAssertNil(coordinator.lastPolished)
+        XCTAssertTrue(coordinator.lastPolishFailed)
+        let calls = await provider.calls
+        XCTAssertEqual(calls, 3)
+        coordinator.clearResult()
+        XCTAssertNil(coordinator.lastPolishStatus)
+    }
+    func testLocalPunctuationDraftIsReviewOnlyAndPreservesText() {
+        let sample = "今天去公园然后到图书馆读书"
+        XCTAssertEqual(FaithfulTextFormatter.punctuationDraft(sample), sample + "。")
+        XCTAssertTrue(FaithfulTextFormatter.preservesContent(sample + "。", source: sample))
+        XCTAssertEqual(FaithfulTextFormatter.format(sample, mode: .rewrite), sample)
+        for protected in ["已有句号。", "他说“继续走”", "路径/tmp/文档", "第3项资料", "第一行\n第二行", "短句"] {
+            XCTAssertNil(FaithfulTextFormatter.punctuationDraft(protected))
+        }
+    }
+
+    func testActualPolishNetworkFailuresRemainSpecificAndRedacted() {
+        let cases: [(Int, String)] = [(-1022, "不安全连接"), (-1202, "证书"),
+            (-1009, "无法连接网络"), (-1003, "域名"), (-1004, "地址和端口"),
+            (-1005, "连接中断"), (-1001, "超时")]
+        for (code, expected) in cases {
+            let error = URLError(URLError.Code(rawValue: code), userInfo: [
+                NSURLErrorFailingURLErrorKey: URL(string: "https://private.example/secret?token=hidden")!,
+                NSLocalizedDescriptionKey: "private fixture body"])
+            let result = PolishExecutionStatus.failure(error).message
+            XCTAssertTrue(result.contains(expected), result)
+            XCTAssertTrue(result.contains("已保留本地文本"))
+            for secret in ["private.example", "token", "hidden", "private fixture"] {
+                XCTAssertFalse(result.contains(secret))
+            }
+        }
+    }
+
+    func testFailureLabelsDoNotExposeProviderTextOrURLs() {
+        let status = PolishExecutionStatus.failure(PolishingError.httpError(500, "secret fixture body"))
+        XCTAssertFalse(status.message.contains("secret fixture"))
+        let unknown = NSError(domain: "fixture", code: 1, userInfo: [NSLocalizedDescriptionKey: "https://private.example/secret"])
+        XCTAssertEqual(PolishExecutionStatus.failure(unknown), .failed("服务异常"))
     }
 }

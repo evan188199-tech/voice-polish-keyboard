@@ -9,6 +9,8 @@ struct VocabularyEntry: Identifiable, Codable, Hashable {
     var notes: String
     var isEnabled: Bool
     var hitCount: Int
+    /// Explicit consent bound to one profile/address/model; nil means local only.
+    var polishDestination: String? = nil
 
     init(
         id: UUID = UUID(),
@@ -66,7 +68,7 @@ struct VocabularyEntry: Identifiable, Codable, Hashable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, phrase, aliases, category, notes, isEnabled, hitCount
+        case id, phrase, aliases, category, notes, isEnabled, hitCount, polishDestination
     }
 
     init(from decoder: Decoder) throws {
@@ -78,5 +80,6 @@ struct VocabularyEntry: Identifiable, Codable, Hashable {
         notes = try container.decodeIfPresent(String.self, forKey: .notes) ?? ""
         isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
         hitCount = try container.decodeIfPresent(Int.self, forKey: .hitCount) ?? 0
+        polishDestination = try container.decodeIfPresent(String.self, forKey: .polishDestination)
     }
 }

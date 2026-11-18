@@ -41,6 +41,7 @@ final class DictationHistoryStore: ObservableObject {
     private let key = "dictation_history_v1"
     private let schemaKey = "dictation_history_schema_version"
     private let limit = 100
+    private let defaults: UserDefaults
     @Published private(set) var entries: [DictationHistoryEntry] = []
 
     struct Statistics: Equatable {
@@ -63,6 +64,7 @@ final class DictationHistoryStore: ObservableObject {
     }
 
     init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         if let data = defaults.data(forKey: key),
            let decoded = try? JSONDecoder().decode([DictationHistoryEntry].self, from: data) {
             entries = decoded
@@ -88,7 +90,7 @@ final class DictationHistoryStore: ObservableObject {
 
     private func persist() {
         if let data = try? JSONEncoder().encode(entries) {
-            UserDefaults.standard.set(data, forKey: key)
+            defaults.set(data, forKey: key)
         }
     }
 

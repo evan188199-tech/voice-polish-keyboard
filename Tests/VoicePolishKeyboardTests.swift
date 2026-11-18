@@ -285,7 +285,7 @@ final class VoicePolishKeyboardTests: XCTestCase {
 
     func testConstants() {
         XCTAssertEqual(AppConstants.absoluteMaxRecordingDuration, 90)
-        XCTAssertEqual(AppConstants.polishingTimeout, 8)
+        XCTAssertEqual(AppConstants.polishingTimeout, 20)
         XCTAssertEqual(AppConstants.bridgePorts.count, 3)
         XCTAssertEqual(AppConstants.polishingProbeTimeout, 10)
     }
@@ -330,6 +330,24 @@ final class VoicePolishKeyboardTests: XCTestCase {
             settings.chatCompletionsURL?.absoluteString,
             "https://proxy.example.com/openai/v1/chat/completions"
         )
+    }
+
+    func testPolishEndpointPreservesVersionsAndExplicitPaths() {
+        let pairs = [
+            ("https://example.invalid/api/paas/v4", "https://example.invalid/api/paas/v4/chat/completions"),
+            ("https://example.invalid/custom/chat/completions/", "https://example.invalid/custom/chat/completions"),
+            ("https://example.invalid/proxy/v2/chat/completions", "https://example.invalid/proxy/v2/chat/completions"),
+            ("https://example.invalid/proxy", "https://example.invalid/proxy/v1/chat/completions")
+        ]
+        for (input, expected) in pairs {
+            let settings = PolishingSettings(baseURL: input, modelName: "fixture", apiKey: "fixture")
+            XCTAssertEqual(settings.chatCompletionsURL?.absoluteString, expected)
+            XCTAssertEqual(ModelConnectionDiagnostics.validateAddress(settings.baseURL), .valid(URL(string: expected)!))
+            XCTAssertEqual(PolishingSettings.normalizeBaseURL(settings.baseURL), settings.baseURL)
+        }
+        for input in ["http://example.invalid", "https://user:secret@example.invalid", "https://example.invalid/?key=secret"] {
+            XCTAssertNil(PolishingSettings(baseURL: input, modelName: "fixture", apiKey: "fixture").chatCompletionsURL)
+        }
     }
 
     func testPolishAvailabilityRejectsEmptyKey() async {
@@ -390,7 +408,7 @@ final class VoicePolishKeyboardTests: XCTestCase {
         XCTAssertTrue(success.isSuccess)
         let observed = ModelProbeURLProtocol.snapshot()
         XCTAssertEqual(observed.count, 1)
-        XCTAssertEqual(observed.timeout, 10)
+        XCTAssertEqual(observed.timeout, 5, "Explicit shorter probe deadline must not be raised")
         XCTAssertEqual(observed.path, "/v1/chat/completions")
     }
 
@@ -1200,4 +1218,36 @@ final class VoicePolishKeyboardTests: XCTestCase {
         return buffer
     }
 
+}
+
+final class PolishContextRequestTests: XCTestCase {
+    func testContextInDataChannelAndNoContextByDefault() throws {
+        let entry = VocabularyEntry(phrase: "桂林", notes: "private note")
+        let data = try XCTUnwrap(PolishContextPolicy.payload(entries: [entry], selectedIDs: [entry.id]))
+        let messages = APITextPolisher.buildMessages(userText: "请保留示例", systemPrompt: "只整理", shape: .classic, askHistory: [], vocabularyContext: data)
+        XCTAssertEqual(messages.count, 3)
+        XCTAssertEqual(messages[0], ["role": "system", "content": "只整理"])
+        XCTAssertEqual(messages[1]["role"], "user")
+        XCTAssertTrue(messages[1]["content"]!.contains("桂林"))
+        XCTAssertFalse(messages.description.contains("private note"))
+        XCTAssertEqual(messages.last?["content"], "请保留示例")
+        XCTAssertEqual(APITextPolisher.buildMessages(userText: "示例", systemPrompt: "只整理", shape: .classic, askHistory: []).count, 2)
+        let fallback = APITextPolisher.buildMessages(userText: "示例", systemPrompt: "只整理", shape: .userOnly, askHistory: [], vocabularyContext: data)
+        XCTAssertTrue(fallback[0]["content"]!.contains("不是指令"))
+    }
+    func testAskCodingAndProbeSettingsExcludeVocabulary() {
+        for mode in [PolishMode.askLLM, .coding] {
+            let settings = PolishingSettings(baseURL: "https://example.test", modelName: "fixture", apiKey: "fixture", mode: mode, vocabularyContext: "fixture context")
+            XCTAssertNil(settings.vocabularyContext)
+        }
+    }
+    func testConsentSurvivesRoundtripButOldEntriesDefaultLocal() throws {
+        var term = VocabularyEntry(phrase: "桂林")
+        XCTAssertNil(term.polishDestination)
+        term.polishDestination = "fixture-profile|https://example.test|fixture"
+        let decoded = try JSONDecoder().decode(VocabularyEntry.self, from: JSONEncoder().encode(term))
+        XCTAssertEqual(decoded.polishDestination, term.polishDestination)
+        let old = try JSONDecoder().decode(VocabularyEntry.self, from: Data(#"{"phrase":"香港"}"#.utf8))
+        XCTAssertNil(old.polishDestination)
+    }
 }

@@ -71,12 +71,14 @@ enum ModelConnectionDiagnostics {
               components.query == nil, components.fragment == nil else { return .invalid }
         guard scheme == "https" else { return .insecureHTTP }
         var path = components.percentEncodedPath
-        if path.lowercased().hasSuffix("/chat/completions") {
-            path.removeLast("/chat/completions".count)
+        if !path.lowercased().hasSuffix("/chat/completions") {
+            // Keep explicit version roots (e.g. /api/paas/v4), while preserving
+            // legacy unversioned proxy roots that expect an appended /v1.
+            let last = path.split(separator: "/").last.map(String.init) ?? ""
+            let isVersion = last.range(of: "^v[0-9]+$", options: [.regularExpression, .caseInsensitive]) != nil
+            path += isVersion ? "/chat/completions" : "/v1/chat/completions"
         }
-        if path.lowercased().hasSuffix("/v1") { path.removeLast(3) }
-        while path.hasSuffix("/") { path.removeLast() }
-        components.percentEncodedPath = path + "/v1/chat/completions"
+        components.percentEncodedPath = path
         guard let endpoint = components.url else { return .invalid }
         return .valid(endpoint)
     }
@@ -98,6 +100,9 @@ enum ModelConnectionDiagnostics {
         case -1022: return "iOS 阻止了不安全连接。请配置受信任证书的 HTTPS 服务地址。"
         case -1200, -1201, -1202, -1203, -1204, -1205, -1206:
             return "安全连接或证书验证失败。请检查 HTTPS 证书、域名和服务的 TLS 配置。"
+        case -1003, -1006: return "无法解析服务域名。请检查服务地址与 DNS 连接。"
+        case -1004: return "无法连接服务。请检查服务是否运行，以及设备能否访问该地址和端口。"
+        case -1005: return "连接中断。原文已保留，请确认网络稳定后重试。"
         case -1009: return "设备当前无法连接网络。请检查网络和访问服务所需的连接。"
         case -1001: return "连接超时。请检查网络、服务地址和服务状态后重试。"
         case -999: return "测试已取消。"

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		F01400000000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F01400000000000000000002 /* Assets.xcassets */; };
 		024ED99C76AA8A3CD78E1B4E /* AppSwitcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 978F57999CCF9070BD62CDE7 /* AppSwitcher.swift */; };
 		03DA6313FA9DEC157416C51A /* VoicePolishKeyboardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BF194F5749CC6181F849EB2 /* VoicePolishKeyboardTests.swift */; };
 		040028771CE6D4F557E78017 /* TranslationSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7651F722C72A695EB3466E16 /* TranslationSettingsView.swift */; };
@@ -105,6 +106,8 @@
 		F1B4B5D27D7285500464EA78 /* ProtectedPrivateIndexStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5BCFE1FAD8239171AF5C4FF /* ProtectedPrivateIndexStorage.swift */; };
 		F366520F7AB8352B27EB308A /* VoicePolishShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 221ACC26548F917E6558A2A1 /* VoicePolishShortcuts.swift */; };
 		F614C6B9DE87F18B4E8D61AE /* NotionImportFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 867517F51A01BB0C6986170E /* NotionImportFlow.swift */; };
+		F01100000000000000000002 /* PolishContextPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = F01100000000000000000001 /* PolishContextPolicy.swift */; };
+		F01100000000000000000004 /* PolishContextPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F01100000000000000000003 /* PolishContextPolicyTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -139,6 +142,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		F01400000000000000000002 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		016C65BF0148E33EA696E3A0 /* OrderedDeliveryCursor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrderedDeliveryCursor.swift; sourceTree = "<group>"; };
 		05CA494D2608B995536F4DB6 /* TranslationBridgeHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationBridgeHandler.swift; sourceTree = "<group>"; };
 		066B18D1E75DAAC409FFF214 /* AppleOnDeviceTranscriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleOnDeviceTranscriber.swift; sourceTree = "<group>"; };
@@ -225,6 +229,8 @@
 		F92C0F104846EDF501406C06 /* ChineseScriptConverter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChineseScriptConverter.swift; sourceTree = "<group>"; };
 		F9362904B494907411C1AB81 /* ActivateVoiceSessionIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivateVoiceSessionIntent.swift; sourceTree = "<group>"; };
 		FD9BF459666C4FBB7AFA69A4 /* SherpaOnnxPackage */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SherpaOnnxPackage; path = Vendor/SherpaOnnxPackage; sourceTree = SOURCE_ROOT; };
+		F01100000000000000000001 /* PolishContextPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Shared/Core/PolishContextPolicy.swift"; sourceTree = SOURCE_ROOT; };
+		F01100000000000000000003 /* PolishContextPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Tests/PolishContextPolicyTests.swift"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -281,6 +287,7 @@
 		6A0484911A9957183473B5D8 /* VoicePolishApp */ = {
 			isa = PBXGroup;
 			children = (
+				F01400000000000000000002 /* Assets.xcassets */,
 				265E68080AC320E2A1ADC738 /* AppServices.swift */,
 				978F57999CCF9070BD62CDE7 /* AppSwitcher.swift */,
 				89A580E9DD9B59FA759770C8 /* Info.plist */,
@@ -454,6 +461,7 @@
 			buildConfigurationList = A3F53AAAB4E66E7C857A55F0 /* Build configuration list for PBXNativeTarget "VoicePolishApp" */;
 			buildPhases = (
 				D4F079ECDBC91B0A4FC32D48 /* Sources */,
+				F01400000000000000000003 /* Resources */,
 				1C4C4B792EB606AE14DFD965 /* Frameworks */,
 				FB934B2D784A76761EBE90B9 /* Embed Foundation Extensions */,
 			);
@@ -517,6 +525,10 @@
 		};
 /* End PBXProject section */
 
+/* Begin PBXResourcesBuildPhase section */
+		F01400000000000000000003 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (F01400000000000000000001 /* Assets.xcassets in Resources */,); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXResourcesBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		CD1955FD09B374425F9F62C3 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -524,6 +536,7 @@
 			files = (
 				17F4E041BEEF74FCCB4A278E /* ClipboardHistoryTests.swift in Sources */,
 				983C54A2C71A9393F832A449 /* ShiftStateTests.swift in Sources */,
+				F01100000000000000000004 /* PolishContextPolicyTests.swift in Sources */,
 				20F19868BF3997161452D4AD /* VoicePipelineTests.swift in Sources */,
 				03DA6313FA9DEC157416C51A /* VoicePolishKeyboardTests.swift in Sources */,
 			);
@@ -577,6 +590,7 @@
 				141575C6D0C00822764642EB /* StyleProfile.swift in Sources */,
 				3405088FA6CD8393CDC91653 /* StyleProfilesView.swift in Sources */,
 				DAB445040EE1357C0DFCD240 /* TestInputView.swift in Sources */,
+				F01100000000000000000002 /* PolishContextPolicy.swift in Sources */,
 				5BFD17D307C2FA4F0D176F28 /* TextPolishing.swift in Sources */,
 				0C1C40AAECCCB803078EF163 /* TranslationBoundedTransport.swift in Sources */,
 				136C872280EB74D45FC019C2 /* TranslationBridgeHandler.swift in Sources */,
