@@ -1,0 +1,71 @@
+{
+  "now": "2030-01-01T10:00:00Z",
+  "channel": "example-draft",
+  "confirmed": true,
+  "item": {
+    "verified": true,
+    "shareable": true,
+    "channels": [
+      "example-draft"
+    ],
+    "expires_at": "2030-01-01T10:01:00Z"
+  },
+  "cases": [
+    {
+      "name": "eligible",
+      "expected": "allow_draft"
+    },
+    {
+      "name": "unverified",
+      "item": {
+        "verified": false
+      },
+      "expected": "deny"
+    },
+    {
+      "name": "permission_missing",
+      "omit": [
+        "shareable"
+      ],
+      "expected": "deny"
+    },
+    {
+      "name": "unshareable",
+      "item": {
+        "shareable": false
+      },
+      "expected": "deny"
+    },
+    {
+      "name": "wrong_channel",
+      "channel": "example-other",
+      "expected": "deny"
+    },
+    {
+      "name": "expires_now",
+      "item": {
+        "expires_at": "2030-01-01T10:00:00Z"
+      },
+      "expected": "deny"
+    },
+    {
+      "name": "already_expired",
+      "item": {
+        "expires_at": "2030-01-01T09:59:59Z"
+      },
+      "expected": "deny"
+    },
+    {
+      "name": "timezone_missing",
+      "item": {
+        "expires_at": "2030-01-01T10:01:00"
+      },
+      "expected": "deny"
+    },
+    {
+      "name": "confirmation_missing",
+      "confirmed": false,
+      "expected": "deny"
+    }
+  ]
+}

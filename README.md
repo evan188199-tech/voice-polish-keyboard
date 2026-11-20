@@ -126,3 +126,5 @@ xcodebuild -project VoicePolishKeyboard.xcodeproj -scheme VoicePolishApp \
 ## 贡献需求与验收示例
 
 公开 issue、评论和 PR 描述可复用的键盘行为，并以虚构条目给出操作和预期结果。例如，把条目“示例甲”设为已到期，点选后当前输入框应保持原样。业务专用的字段映射、审批人和渠道规则由使用方自行维护。请把内部链接、实际工作区标识、真实用户资料和凭证留在公开讨论之外。
+
+内容源适配器可复用[草稿引用验收样例](Tests/Fixtures/draft-eligibility.json)。每个用例从同一条虚构记录开始，用用例里的字段覆盖同名值，再移除 `omit` 列出的字段。`allow_draft` 表示用户可把已选内容插入当前草稿；`deny` 应保持输入框原样。时间比较包含到期瞬间。这组数据用于分别验收适配器与宿主行为。
