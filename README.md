@@ -115,9 +115,14 @@ xcrun devicectl device process launch --device <device-id> com.voicepolish.app
 ## 单元测试
 
 ```bash
+./scripts/prepare_vendor.sh
 xcodegen generate
 
-# 运行 iOS 单元测试
+# 运行 iOS 单元测试（将设备名称替换为本机已安装的模拟器）
 xcodebuild -project VoicePolishKeyboard.xcodeproj -scheme VoicePolishApp \
   -destination 'platform=iOS Simulator,name=iPhone 16' test
 ```
+
+## 贡献需求与验收示例
+
+公开 issue、评论和 PR 描述可复用的键盘行为，并以虚构条目给出操作和预期结果。例如，把条目“示例甲”设为已到期，点选后当前输入框应保持原样。业务专用的字段映射、审批人和渠道规则由使用方自行维护。请把内部链接、实际工作区标识、真实用户资料和凭证留在公开讨论之外。
