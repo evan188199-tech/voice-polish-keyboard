@@ -16,6 +16,7 @@ struct ContentView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
+                    polishToggle
                     onboarding
                     statusCard
                     usageStats
@@ -73,6 +74,16 @@ struct ContentView: View {
                 }
             }
         }
+    }
+
+    private var polishToggle: some View {
+        Toggle("启用润色", isOn: Binding(
+            get: { settings.polishEnabled },
+            set: { coordinator.setPolishEnabled($0) }
+        ))
+        .accessibilityIdentifier("home.polishToggle")
+        .padding()
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 
     private var onboarding: some View {
