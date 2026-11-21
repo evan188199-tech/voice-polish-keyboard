@@ -37,7 +37,16 @@ final class HostVC: UIViewController, UITextFieldDelegate {
             let end = self.field.position(from: start, offset: 5)!
             self.field.selectedTextRange = self.field.textRange(from: start, to: end)
         }, for: .touchUpInside)
-        let stack = UIStackView(arrangedSubviews: [select,field,prose,sendReceipt])
+        let resume = UIButton(type: .system)
+        resume.setTitle("继续周五草稿", for: .normal)
+        resume.accessibilityIdentifier = "host.resumeProse"
+        resume.addAction(UIAction { [weak self] _ in
+            guard let self else { return }
+            self.prose.text = "周五见 "
+            self.prose.becomeFirstResponder()
+            self.prose.selectedRange = NSRange(location: (self.prose.text as NSString).length, length: 0)
+        }, for: .touchUpInside)
+        let stack = UIStackView(arrangedSubviews: [select,field,resume,prose,sendReceipt])
         stack.spacing = 16; stack.axis = .vertical; stack.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(stack)
         NSLayoutConstraint.activate([

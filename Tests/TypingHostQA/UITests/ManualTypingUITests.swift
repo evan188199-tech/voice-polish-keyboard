@@ -67,6 +67,29 @@ final class ManualTypingUITests: XCTestCase {
         XCTAssertEqual(field.value as? String, "Alpha " + chosen + "没问题 Omega")
     }
 
+    func testMixedMeetingDraftWithCaseNumbersAndNewline() throws {
+        let app = try openKeyboard()
+        app.buttons["host.resumeProse"].tap()
+        func tap(_ key: String) { app.buttons[key].firstMatch.tap() }
+        tap("切换到英文键盘")
+        for key in ["Shift", "T", "e", "a", "m", "空格", "Shift", "S", "y", "n", "c", "空格", "a", "t", "空格",
+                    "切换到数字键盘", "3", "空格", "切换到英文键盘"] { tap(key) }
+        app.buttons["Shift"].firstMatch.doubleTap()
+        tap("P")
+        tap("M")
+        tap("切换到数字键盘")
+        tap("小数点")
+        let prose = app.textViews["host.prose"]
+        let draft = "周五见 Team Sync at 3 PM."
+        XCTAssertEqual(prose.value as? String, draft)
+        tap("换行")
+        XCTAssertEqual(prose.value as? String, draft + "\n")
+        app.buttons["delete.backward"].firstMatch.tap()
+        tap("回到语音键盘")
+        XCTAssertEqual(prose.value as? String, draft)
+        XCTAssertTrue(app.buttons["切换到英文键盘"].firstMatch.exists)
+    }
+
     func testExplicitNextWordUndoAndHostText() throws {
         let app = try openKeyboard()
         let field = app.textFields["host.field"]
