@@ -107,9 +107,18 @@ struct PinyinKeyboard: View {
             HStack(spacing: 4) {
                 key("’", label: "拼音隔音符") { composition.append("'") }
                 letters("zxcvbnm")
-                key("⌫", label: "退格") {
+                Button {
                     if composition.code.isEmpty { delete() } else { composition.backspace() }
+                } label: {
+                    Image(systemName: "delete.left")
+                        .font(.title3.weight(.semibold))
+                        .frame(width: 48)
+                        .frame(maxHeight: .infinity)
+                        .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 5))
+                        .contentShape(Rectangle())
                 }
+                .accessibilityLabel("退格")
+                .accessibilityIdentifier("pinyin.backspace")
             }
         }
         .buttonStyle(.plain)
