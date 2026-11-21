@@ -60,7 +60,7 @@ final class VoicePolishKeyboardTests: XCTestCase {
         let cleaned = LocalTextProcessor.process("嗯 今天 啊 去 codex", vocabulary: "")
         XCTAssertFalse(cleaned.contains("嗯"))
         XCTAssertTrue(cleaned.contains("今天"))
-        XCTAssertTrue(cleaned.contains("codex"))
+        XCTAssertTrue(cleaned.contains("Codex"))
     }
 
 
@@ -78,6 +78,7 @@ final class VoicePolishKeyboardTests: XCTestCase {
 
         let english = LocalTextProcessor.process("HELLO WORLD. OPEN THE APP.", vocabulary: "")
         XCTAssertEqual(english, "Hello world. Open the app.")
+        XCTAssertEqual(LocalTextProcessor.process("OPEN THE APP STORE", vocabulary: ""), "Open the App Store")
 
         let acronyms = LocalTextProcessor.process("CHECK THE API AND VPN PLEASE", vocabulary: "")
         XCTAssertTrue(acronyms.contains("API"))
@@ -128,7 +129,7 @@ final class VoicePolishKeyboardTests: XCTestCase {
         XCTAssertEqual(LocalTextProcessor.process("A B C", vocabulary: ""), "ABC")
         XCTAssertEqual(LocalTextProcessor.process("connect to U S B now", vocabulary: ""), "Connect to USB now")
         XCTAssertEqual(LocalTextProcessor.process("I am ready", vocabulary: ""), "I am ready")
-        XCTAssertEqual(LocalTextProcessor.process("open E U P B", vocabulary: "EUPB"), "open EUPB")
+        XCTAssertEqual(LocalTextProcessor.process("open E U P B", vocabulary: "EUPB"), "Open EUPB")
     }
 
     func testJoinTranscriptSegmentsChineseBareGetsPeriod() {

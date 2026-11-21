@@ -56,16 +56,19 @@ final class ClipboardHistoryTests: XCTestCase {
     }
 
     func testLoadSaveRoundtrip() {
-        let defaults = UserDefaults(suiteName: "clipboard-test-\(UUID().uuidString)")!
+        let suite = "clipboard-test-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let now = Date(timeIntervalSince1970: 2000)
         var entries: [ClipboardEntry] = []
-        entries = ClipboardHistoryStore.append("alpha", to: entries, at: Date(timeIntervalSince1970: 1000))
-        entries = ClipboardHistoryStore.append("beta", to: entries, at: Date(timeIntervalSince1970: 2000))
+        entries = ClipboardHistoryStore.append("alpha", to: entries, at: now.addingTimeInterval(-1000))
+        entries = ClipboardHistoryStore.append("beta", to: entries, at: now)
         ClipboardHistoryStore.save(entries, defaults: defaults)
 
-        let loaded = ClipboardHistoryStore.load(defaults: defaults)
-        XCTAssertEqual(loaded.count, 2)
-        XCTAssertEqual(loaded.first?.text, "beta")
-        XCTAssertEqual(loaded.last?.text, "alpha")
+        XCTAssertEqual(ClipboardHistoryStore.load(defaults: defaults, at: now), entries)
+        let sevenDaysLater = now.addingTimeInterval(7 * 86_400)
+        XCTAssertEqual(ClipboardHistoryStore.load(defaults: defaults, at: sevenDaysLater).map(\.text), ["beta"])
+        XCTAssertTrue(ClipboardHistoryStore.load(defaults: defaults, at: sevenDaysLater.addingTimeInterval(1)).isEmpty)
     }
 
     func testPrunedCopyDropsExpired() {
@@ -82,37 +85,48 @@ final class ClipboardHistoryTests: XCTestCase {
 
     // MARK: - Mirror store
 
+    @MainActor
     func testMirrorMergeReplacesAndFiltersHiddenIDs() {
         let suite = "clipboard-mirror-test-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
-        let mirror = ClipboardMirrorStore(defaults: defaults)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let mirror = ClipboardMirrorStore(defaults: defaults, at: now)
 
-        let e1 = ClipboardEntry(text: "A", createdAt: Date())
-        let e2 = ClipboardEntry(text: "B", createdAt: Date())
-        mirror.merge([e1, e2])
+        let e1 = ClipboardEntry(text: "A", createdAt: now)
+        let e2 = ClipboardEntry(text: "B", createdAt: now)
+        mirror.merge([e1, e2], at: now)
         XCTAssertEqual(mirror.entries.count, 2)
+        XCTAssertEqual(ClipboardMirrorStore(defaults: defaults, at: now).entries, [e1, e2])
 
         mirror.hide(id: e1.id)
         XCTAssertEqual(mirror.entries.count, 1)
         XCTAssertFalse(mirror.entries.contains { $0.id == e1.id })
 
         // Re-merge the full snapshot; the hidden id stays hidden.
-        let visible = mirror.merge([e1, e2])
-        XCTAssertEqual(visible.count, 1)
-        XCTAssertEqual(visible.first?.id, e2.id)
+        let reloaded = ClipboardMirrorStore(defaults: defaults, at: now)
+        XCTAssertEqual(reloaded.entries, [e2])
+        XCTAssertEqual(reloaded.merge([e1, e2], at: now), [e2])
+        let expired = now.addingTimeInterval(7 * 86_400 + 1)
+        XCTAssertTrue(ClipboardMirrorStore(defaults: defaults, at: expired).entries.isEmpty)
     }
 
+    @MainActor
     func testMirrorClearMarksAllAsHidden() {
-        let defaults = UserDefaults(suiteName: "clipboard-mirror-clear-\(UUID().uuidString)")!
-        let mirror = ClipboardMirrorStore(defaults: defaults)
-        let e1 = ClipboardEntry(text: "A", createdAt: Date())
-        let e2 = ClipboardEntry(text: "B", createdAt: Date())
-        mirror.merge([e1, e2])
+        let suite = "clipboard-mirror-clear-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let mirror = ClipboardMirrorStore(defaults: defaults, at: now)
+        let e1 = ClipboardEntry(text: "A", createdAt: now)
+        let e2 = ClipboardEntry(text: "B", createdAt: now)
+        mirror.merge([e1, e2], at: now)
         mirror.clear()
         XCTAssertTrue(mirror.entries.isEmpty)
         // After clear, re-pushing the same entries should still yield nothing.
-        let visible = mirror.merge([e1, e2])
-        XCTAssertTrue(visible.isEmpty)
+        let reloaded = ClipboardMirrorStore(defaults: defaults, at: now)
+        XCTAssertTrue(reloaded.entries.isEmpty)
+        XCTAssertTrue(reloaded.merge([e1, e2], at: now).isEmpty)
     }
 
     // MARK: - Bridge protocol round-trips

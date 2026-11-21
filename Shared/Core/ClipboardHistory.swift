@@ -32,11 +32,13 @@ enum ClipboardHistoryPolicy {
 enum ClipboardHistoryStore {
     private static let key = "clipboard_history_v1"
 
-    static func load(defaults: UserDefaults = .standard) -> [ClipboardEntry] {
+    static func load(defaults: UserDefaults = .standard, at now: Date = Date()) -> [ClipboardEntry] {
         guard let data = defaults.data(forKey: key),
               let decoded = try? JSONDecoder().decode([ClipboardEntry].self, from: data)
         else { return [] }
-        return pruneExpired(decoded)
+        let recent = prunedCopy(decoded, at: now)
+        if recent.count != decoded.count { save(recent, defaults: defaults) }
+        return recent
     }
 
     static func save(_ entries: [ClipboardEntry], defaults: UserDefaults = .standard) {
@@ -91,77 +93,52 @@ enum ClipboardHistoryStore {
 /// Because the bridge is one-way (keyboard = client, main app = server), the main app
 /// cannot push deletions back to the keyboard. Deletions here are "hidden" via an id set
 /// and applied on the next incoming sync so they stick.
-final class ClipboardMirrorStore: ObservableObject, @unchecked Sendable {
+@MainActor
+final class ClipboardMirrorStore: ObservableObject {
     static let shared = ClipboardMirrorStore()
 
     private let entriesKey = "clipboard_mirror_v1"
     private let hiddenIDsKey = "clipboard_hidden_ids_v1"
     private let defaults: UserDefaults
-    private let lock = NSLock()
 
     @Published private(set) var entries: [ClipboardEntry] = []
     private var hiddenIDs: Set<String> = []
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, at now: Date = Date()) {
         self.defaults = defaults
-        reload()
-    }
-
-    private func reload() {
-        lock.lock()
-        defer { lock.unlock() }
-        if let data = defaults.data(forKey: entriesKey),
-           let decoded = try? JSONDecoder().decode([ClipboardEntry].self, from: data) {
-            entries = decoded
-        } else {
-            entries = []
-        }
         if let ids = defaults.array(forKey: hiddenIDsKey) as? [String] {
             hiddenIDs = Set(ids)
-        } else {
-            hiddenIDs = []
         }
-        entries = entries.filter { !hiddenIDs.contains($0.id) }
-        persistLocked()
+        if let data = defaults.data(forKey: entriesKey),
+           let decoded = try? JSONDecoder().decode([ClipboardEntry].self, from: data) {
+            merge(decoded, at: now)
+        }
     }
 
     /// Replace the mirror with the incoming keyboard snapshot, then filter out hidden ids.
-    /// Returns the stored (visible) list. Safe to call from any thread.
+    /// Returns the same visible list that is published and persisted.
     @discardableResult
-    func merge(_ incoming: [ClipboardEntry]) -> [ClipboardEntry] {
-        lock.lock()
-        defer { lock.unlock() }
-        let visible = incoming.filter { !hiddenIDs.contains($0.id) }
-        let capped = Array(visible.prefix(ClipboardHistoryPolicy.maxEntries))
-        let result = capped
-        DispatchQueue.main.async { [weak self] in
-            self?.entries = capped
-        }
-        persistLocked()
-        return result
+    func merge(_ incoming: [ClipboardEntry], at now: Date = Date()) -> [ClipboardEntry] {
+        let recent = ClipboardHistoryStore.prunedCopy(incoming, at: now)
+        let visible = recent.filter { !hiddenIDs.contains($0.id) }
+        entries = Array(visible.prefix(ClipboardHistoryPolicy.maxEntries))
+        persist()
+        return entries
     }
 
     func hide(id: String) {
-        lock.lock()
-        defer { lock.unlock() }
         hiddenIDs.insert(id)
-        DispatchQueue.main.async { [weak self] in
-            self?.entries.removeAll { $0.id == id }
-        }
-        persistLocked()
+        entries.removeAll { $0.id == id }
+        persist()
     }
 
     func clear() {
-        lock.lock()
-        defer { lock.unlock() }
-        for entry in entries { hiddenIDs.insert(entry.id) }
-        DispatchQueue.main.async { [weak self] in
-            self?.entries = []
-        }
-        persistLocked()
+        hiddenIDs.formUnion(entries.map(\.id))
+        entries = []
+        persist()
     }
 
-    private func persistLocked() {
+    private func persist() {
         if let data = try? JSONEncoder().encode(entries) {
             defaults.set(data, forKey: entriesKey)
         }
