@@ -36,8 +36,13 @@ struct PinyinLexicon {
 
     private func offset(_ row: Int) -> Int { records + Self.integer(data, 4 + row * 4) }
 
-    private func compare(_ row: Int, _ key: ArraySlice<UInt8>) -> Int {
+    private func compare(_ row: Int, _ key: ArraySlice<UInt8>, shortcut: Bool) -> Int {
         var i = offset(row)
+        if shortcut {
+            let marker: UInt8 = 126 // "~" in the compiled table
+            if data[i] != marker { return Int(data[i]) - Int(marker) }
+            i += 1
+        }
         for letter in key {
             let byte = data[i]
             if byte != letter { return Int(byte) - Int(letter) }
@@ -51,15 +56,15 @@ struct PinyinLexicon {
         let cost: Int
     }
 
-    private func matches(_ key: ArraySlice<UInt8>, boundaries: Set<Int>, firstOnly: Bool) -> [Match] {
+    private func matches(_ key: ArraySlice<UInt8>, boundaries: Set<Int>, firstOnly: Bool, shortcut: Bool = false) -> [Match] {
         var low = 0, high = count
         while low < high {
             let mid = (low + high) / 2
-            if compare(mid, key) < 0 { low = mid + 1 } else { high = mid }
+            if compare(mid, key, shortcut: shortcut) < 0 { low = mid + 1 } else { high = mid }
         }
         var result: [Match] = []
-        while low < count && compare(low, key) == 0 {
-            let start = offset(low) + key.count + 1
+        while low < count && compare(low, key, shortcut: shortcut) == 0 {
+            let start = offset(low) + key.count + (shortcut ? 2 : 1)
             let end = offset(low + 1)
             low += 1
             var i = start, boundary = key.startIndex, hit = 0
@@ -98,11 +103,16 @@ struct PinyinLexicon {
         var best = Array<(word: String, cost: Int)?>(repeating: nil, count: n + 1)
         best[n] = ("", 0)
         var prefixes: [PinyinCandidate] = []
+        let hasShortcuts = data[offset(count - 1)] == 126
         for i in (0..<n).reversed() {
             for end in (i + 1...min(n, i + 32)).reversed() where i == 0 || best[end] != nil {
                 let matches = matches(letters[i..<end], boundaries: boundaries, firstOnly: i != 0)
                 if i == 0 {
-                    prefixes += matches.map { PinyinCandidate(word: $0.word, consumed: consumed[end]) }
+                    var choices = matches
+                    if hasShortcuts {
+                        choices += self.matches(letters[i..<end], boundaries: boundaries, firstOnly: false, shortcut: true)
+                    }
+                    prefixes += choices.map { PinyinCandidate(word: $0.word, consumed: consumed[end]) }
                 }
                 if let first = matches.first, let rest = best[end] {
                     let cost = first.cost + rest.cost

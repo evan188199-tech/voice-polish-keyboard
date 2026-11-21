@@ -48,6 +48,25 @@ final class ManualTypingUITests: XCTestCase {
         XCTAssertEqual(app.staticTexts["host.localSend"].label, "Alpha 你好性情abc Omega")
     }
 
+    func testInitialsPreserveUnselectedSuffix() throws {
+        let app = try openKeyboard()
+        app.buttons["切换到拼音键盘"].firstMatch.tap()
+        app.buttons["pinyin.scheme"].firstMatch.tap()
+        app.buttons["全拼"].firstMatch.tap()
+        let field = app.textFields["host.field"]
+        for key in "dzjwqm" { app.buttons[String(key)].firstMatch.tap() }
+        let candidate = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'pinyin.choice.'")).firstMatch
+        XCTAssertTrue(candidate.exists)
+        let chosen = candidate.label
+        candidate.tap()
+        XCTAssertEqual(field.value as? String, "Alpha " + chosen + " Omega")
+        XCTAssertFalse(app.staticTexts["pinyin.code"].firstMatch.label.isEmpty)
+        app.buttons["清除拼音编码"].firstMatch.tap()
+        for key in "mwt" { app.buttons[String(key)].firstMatch.tap() }
+        app.buttons["pinyin.choice.没问题"].firstMatch.tap()
+        XCTAssertEqual(field.value as? String, "Alpha " + chosen + "没问题 Omega")
+    }
+
     func testExplicitNextWordUndoAndHostText() throws {
         let app = try openKeyboard()
         let field = app.textFields["host.field"]

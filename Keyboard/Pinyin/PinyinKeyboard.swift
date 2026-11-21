@@ -92,6 +92,9 @@ struct PinyinKeyboard: View {
             HStack(spacing: 3) {
                 Button { composition.page -= 1 } label: { Image(systemName: "chevron.left") }
                     .disabled(composition.page == 0).accessibilityLabel("上一页候选")
+                if !composition.code.isEmpty && composition.candidates.isEmpty {
+                    Text("暂无候选，可退格修改").font(.footnote).foregroundStyle(.secondary)
+                }
                 ForEach(Array(composition.visibleChoices), id: \.self) { choice in
                     Button(choice.word) { composition.accept(choice, insert: insert) }
                         .lineLimit(1).frame(maxWidth: .infinity)

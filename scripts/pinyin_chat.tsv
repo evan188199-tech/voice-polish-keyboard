@@ -1,0 +1,37 @@
+# 项目自编常用聊天词。每行依次为词条、无声调拼音、排序代价（越低越靠前）。
+你好	ni hao	410
+谢谢	xie xie	410
+好的	hao de	450
+没问题	mei wen ti	490
+不客气	bu ke qi	540
+不好意思	bu hao yi si	530
+对不起	dui bu qi	520
+没关系	mei guan xi	530
+麻烦你了	ma fan ni le	560
+辛苦了	xin ku le	520
+收到	shou dao	500
+收到了	shou dao le	510
+在吗	zai ma	500
+可以吗	ke yi ma	540
+可以的	ke yi de	550
+我知道了	wo zhi dao le	530
+知道了	zhi dao le	520
+等一下	deng yi xia	510
+稍等	shao deng	520
+稍等一下	shao deng yi xia	520
+等会儿	deng hui er	550
+一会儿见	yi hui er jian	565
+明天见	ming tian jian	510
+早上好	zao shang hao	525
+下午好	xia wu hao	540
+晚上好	wan shang hao	530
+晚安	wan an	510
+微信	wei xin	480
+二维码	er wei ma	510
+发给我	fa gei wo	550
+发给你	fa gei ni	550
+方便吗	fang bian ma	550
+到时候	dao shi hou	540
+回头见	hui tou jian	550
+谢谢你	xie xie ni	530
+大家好	da jia hao	540
