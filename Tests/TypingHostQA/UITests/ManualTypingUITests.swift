@@ -90,6 +90,34 @@ final class ManualTypingUITests: XCTestCase {
         XCTAssertTrue(app.buttons["切换到英文键盘"].firstMatch.exists)
     }
 
+    func testDisableSuggestionsAndKeepIdentifiersAcrossFields() throws {
+        let app = try openKeyboard()
+        func tap(_ key: String) { app.buttons[key].firstMatch.tap() }
+        tap("切换到英文键盘")
+        for key in ["t", "e", "h"] { tap(key) }
+        let suggestion = app.buttons["typing.choice.the"].firstMatch
+        XCTAssertTrue(suggestion.waitForExistence(timeout: 3))
+        tap("英文输入设置")
+        tap("关闭英文建议")
+        XCTAssertFalse(suggestion.exists)
+        defer {
+            if app.buttons["英文输入设置"].firstMatch.exists {
+                tap("英文输入设置")
+                if app.buttons["开启英文建议"].firstMatch.exists { tap("开启英文建议") }
+            }
+        }
+        app.buttons["host.resumeProse"].tap()
+        if app.buttons["切换到英文键盘"].firstMatch.exists { tap("切换到英文键盘") }
+        XCTAssertFalse(suggestion.exists)
+        for key in ["Shift", "A", "l", "Shift", "B", "切换到数字键盘", "at 符号", "切换到英文键盘",
+                    "a", "切换到数字键盘", "小数点", "切换到英文键盘", "c", "o", "空格",
+                    "x", "切换到数字键盘", "小数点", "切换到英文键盘", "c", "o", "切换到数字键盘",
+                    "斜杠", "切换到英文键盘", "Shift", "Q"] { tap(key) }
+        XCTAssertEqual(app.textViews["host.prose"].value as? String, "周五见 AlB@a.co x.co/Q")
+        XCTAssertEqual(app.textFields["host.field"].value as? String, "Alpha teh Omega")
+        XCTAssertFalse(suggestion.exists)
+    }
+
     func testExplicitNextWordUndoAndHostText() throws {
         let app = try openKeyboard()
         let field = app.textFields["host.field"]
