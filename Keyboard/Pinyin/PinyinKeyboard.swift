@@ -72,11 +72,8 @@ struct PinyinKeyboard: View {
     var body: some View {
         VStack(spacing: 3) {
             HStack(spacing: 5) {
-                Menu(composition.scheme.rawValue) {
-                    ForEach([PinyinScheme.full, .sogou], id: \.self) { scheme in
-                        Button(scheme.rawValue) { composition.choose(scheme) }
-                    }
-                }.accessibilityLabel("拼音方案，" + composition.scheme.rawValue).accessibilityIdentifier("pinyin.scheme")
+                schemeButton(.full, id: "pinyin.scheme.full")
+                schemeButton(.sogou, id: "pinyin.scheme.sogou")
                 Text(composition.code).lineLimit(1).truncationMode(.head)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityIdentifier("pinyin.code")
@@ -116,6 +113,25 @@ struct PinyinKeyboard: View {
             }
         }
         .buttonStyle(.plain)
+    }
+
+    private func schemeButton(_ value: PinyinScheme, id: String) -> some View {
+        let selected = composition.scheme == value
+        return Button {
+            composition.choose(value)
+        } label: {
+            Text(value.rawValue)
+                .fontWeight(selected ? .semibold : .regular)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .padding(.horizontal, 7)
+                .frame(minHeight: 32)
+                .foregroundStyle(selected ? Color(uiColor: .systemBackground) : Color.primary)
+                .background(selected ? Color.primary : Color(uiColor: .secondarySystemBackground),
+                            in: RoundedRectangle(cornerRadius: 6))
+        }
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityIdentifier(id)
     }
 
     private func row(_ keys: String) -> some View {
