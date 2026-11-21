@@ -1,0 +1,32 @@
+name: 提出建议
+description: 告诉我们你希望怎样改进言出文随。
+title: "[建议] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提交后内容公开。请勿填写个人资料、真实聊天内容或密钥。若已有相同建议，可在原帖说明你的使用场景。
+  - type: textarea
+    id: scenario
+    attributes:
+      label: 你在做什么时遇到了不便？
+      description: 说明使用场景和现有做法。
+    validations:
+      required: true
+  - type: textarea
+    id: improvement
+    attributes:
+      label: 希望怎么改？
+      description: 可以给一个合成示例，也可以说说当前替代办法。
+    validations:
+      required: true
+  - type: dropdown
+    id: role
+    attributes:
+      label: 你的使用场景（可选）
+      description: 自报场景仅供分类，不代表身份已认证，也不自动改变优先级。
+      options:
+        - 日常输入
+        - 内容创作
+        - 开发或测试
+        - 其他

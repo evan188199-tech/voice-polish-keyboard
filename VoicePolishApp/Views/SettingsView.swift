@@ -262,6 +262,14 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    NavigationLink {
+                        FeedbackView(appVersion: appVersion)
+                    } label: {
+                        Label("反馈与进度", systemImage: "bubble.left.and.bubble.right")
+                    }
+                }
+
+                Section {
                     HStack {
                         Text("版本")
                         Spacer()
@@ -351,5 +359,46 @@ struct SettingsView: View {
         let result = await APITextPolisher().testAvailability(settings: probe)
         testMessage = result.message
         testSucceeded = result.isSuccess
+    }
+}
+
+
+private struct FeedbackView: View {
+    let appVersion: String
+
+    private static let issuesURL = URL(string: "https://github.com/evan188199-tech/voice-polish-keyboard/issues")!
+    private static let bugURL = URL(string: "https://github.com/evan188199-tech/voice-polish-keyboard/issues/new?template=bug-report.yml")!
+    private static let suggestionURL = URL(string: "https://github.com/evan188199-tech/voice-polish-keyboard/issues/new?template=feature-request.yml")!
+
+    var body: some View {
+        Form {
+            Section {
+                Link(destination: Self.bugURL) {
+                    Label("报告问题", systemImage: "exclamationmark.bubble")
+                }
+                Link(destination: Self.suggestionURL) {
+                    Label("提出建议", systemImage: "lightbulb")
+                }
+            } header: {
+                Text("提交反馈")
+            } footer: {
+                Text("在 GitHub 登录后提交，不需要 API Key。反馈默认公开，请勿填写账号密钥、真实聊天内容或个人资料。App 不会自动附上录音、转写或日志。")
+            }
+
+            Section {
+                Link(destination: Self.issuesURL) {
+                    Label("查看反馈与进度", systemImage: "list.bullet.rectangle")
+                }
+            } footer: {
+                Text("可以先搜相似反馈，再决定是否新建。提交后保存 Issue 链接，或在 GitHub 订阅更新。")
+            }
+
+            Section("报告问题时可填") {
+                LabeledContent("App 版本", value: appVersion)
+                    .textSelection(.enabled)
+            }
+        }
+        .navigationTitle("反馈与进度")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
