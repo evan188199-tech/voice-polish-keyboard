@@ -3,6 +3,8 @@ import UIKit
 
 struct KeyboardView: View {
     @ObservedObject var model: KeyboardViewModel
+    @ObservedObject var typing: ManualTypingCandidates
+    @ObservedObject var pinyin: PinyinComposition
     let onInsert: (String) -> Void
     let onDelete: () -> Void
     let onReturn: () -> Void
@@ -29,7 +31,8 @@ struct KeyboardView: View {
         ("&", "and 符号"),
         ("*", "星号"),
         ("/", "斜杠"),
-        ("_", "下划线")
+        ("_", "下划线"),
+        (";", "英文分号")
     ]
 
     private static let numberPadRows: [[(character: String, accessibilityLabel: String)]] = [
@@ -49,6 +52,8 @@ struct KeyboardView: View {
                 voiceContent
             } else if page == .abc {
                 abcContent
+            } else if page == .pinyin {
+                PinyinKeyboard(composition: pinyin, insert: requestInsertion, delete: onDelete)
             } else if page == .numbers {
                 numberPadContent
             } else {
@@ -62,6 +67,7 @@ struct KeyboardView: View {
         .frame(maxWidth: .infinity)
         .frame(height: KeyboardLayout.contentHeight)
         .background(Color(uiColor: .systemGroupedBackground))
+        .onAppear { typing.setActive(page == .abc) }
         .onChange(of: model.isRecording) { _, isRecording in
             // Keep the user on the voice page while a hold-to-record gesture is active.
             if isRecording {
@@ -69,6 +75,8 @@ struct KeyboardView: View {
             }
         }
         .onChange(of: page) { _, newPage in
+            typing.setActive(newPage == .abc)
+            if newPage != .pinyin { pinyin.clear() }
             // Don't let a stray Shift state persist after leaving the ABC page.
             if newPage != .abc {
                 shiftState = .off
@@ -449,6 +457,21 @@ struct KeyboardView: View {
 
     private var abcContent: some View {
         VStack(spacing: 5) {
+            HStack(spacing: 4) {
+                ForEach(typing.choices) { choice in
+                    Button(choice.word) { typing.apply(choice) }
+                        .lineLimit(1).frame(maxWidth: .infinity)
+                        .accessibilityIdentifier("typing.choice." + choice.word)
+                }
+                if typing.canUndo {
+                    Button { typing.undoLast() } label: { Image(systemName: "arrow.uturn.backward") }
+                        .accessibilityLabel("撤销英文候选").accessibilityIdentifier("typing.undo")
+                }
+                Spacer(minLength: 0)
+                Menu {
+                    Button(typing.enabled ? "关闭英文建议" : "开启英文建议") { typing.setEnabled(!typing.enabled) }
+                } label: { Image(systemName: "ellipsis.circle") }.accessibilityLabel("英文输入设置")
+            }.frame(minHeight: 30)
             HStack(spacing: 6) {
                 ForEach(Self.qwertyRowTop, id: \.self) { letter in
                     letterKey(letter)
@@ -606,14 +629,15 @@ struct KeyboardView: View {
     private var editingRow: some View {
         HStack(spacing: 6) {
             pageToggleButtons
-                .frame(width: 144)
+                .frame(width: 175)
 
             characterKey("空格", accessibilityLabel: "空格", style: .space) {
-                requestInsertion(" ")
+                if !choosePinyinIfComposing() { requestInsertion(" ") }
             }
             .frame(maxWidth: .infinity)
 
             characterKey("换行", accessibilityLabel: "换行", style: .returnKey) {
+                if choosePinyinIfComposing() { return }
                 requestAction(onReturn)
             }
             .frame(width: 64)
@@ -623,6 +647,7 @@ struct KeyboardView: View {
 
     private var pageToggleButtons: some View {
         return HStack(spacing: 4) {
+            pageButton(.pinyin, label: "拼音", voiceLabel: "拼音键盘", icon: nil)
             pageButton(.abc, label: "ABC", voiceLabel: "英文键盘", icon: nil)
             pageButton(.numbers, label: "123", voiceLabel: "数字键盘", icon: nil)
             pageButton(.clipboard, label: nil, voiceLabel: "剪切板", icon: "list.clipboard")
@@ -639,7 +664,9 @@ struct KeyboardView: View {
             }
         } label: {
             Group {
-                if let icon {
+                if isSelected {
+                    Image(systemName: "mic.fill").font(.body.weight(.semibold))
+                } else if let icon {
                     Image(systemName: icon).font(.body.weight(.semibold))
                 } else if let label {
                     Text(label).font(.subheadline.weight(.semibold).monospacedDigit())
@@ -695,6 +722,12 @@ struct KeyboardView: View {
         }
         .buttonStyle(KeyboardPressButtonStyle())
         .accessibilityLabel(accessibilityLabel)
+    }
+
+    private func choosePinyinIfComposing() -> Bool {
+        guard page == .pinyin, !pinyin.code.isEmpty else { return false }
+        if let first = pinyin.visibleChoices.first { pinyin.accept(first, insert: requestInsertion) }
+        return true
     }
 
     private func requestInsertion(_ text: String) {
@@ -827,6 +860,7 @@ struct KeyboardView: View {
 enum KeyboardPage {
     case voice
     case abc
+    case pinyin
     case numbers
     case clipboard
 

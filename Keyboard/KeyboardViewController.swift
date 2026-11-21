@@ -3,6 +3,9 @@ import SwiftUI
 
 final class KeyboardViewController: UIInputViewController {
     private var host: UIHostingController<KeyboardView>?
+    private let typing = ManualTypingCandidates()
+    private var typingVisit = UUID()
+    private let pinyin = PinyinComposition()
     private let viewModel = KeyboardViewModel()
 
     override func viewDidLoad() {
@@ -22,20 +25,67 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        typingVisit = UUID()
+        typing.refresh()
+        pinyin.clear()
+        typing.setActive(false)
         viewModel.disconnect()
+    }
+
+    override func textWillChange(_ textInput: (any UITextInput)?) {
+        typingVisit = UUID()
+        typing.refresh()
+        pinyin.clear()
+        super.textWillChange(textInput)
+    }
+
+    override func selectionWillChange(_ textInput: (any UITextInput)?) {
+        typingVisit = UUID()
+        typing.refresh()
+        pinyin.clear()
+        super.selectionWillChange(textInput)
+    }
+
+    override func textDidChange(_ textInput: (any UITextInput)?) {
+        super.textDidChange(textInput)
+        typing.refresh()
+    }
+
+    override func selectionDidChange(_ textInput: (any UITextInput)?) {
+        super.selectionDidChange(textInput)
+        typing.refresh()
     }
 
     private func setupKeyboard() {
         (view as? UIInputView)?.allowsSelfSizing = true
         inputView?.allowsSelfSizing = true
 
+        pinyin.currentDocument = { [weak self] in (self?.textDocumentProxy as AnyObject?)?.perform(#selector(getter: UITextDocumentProxy.documentIdentifier))?.takeUnretainedValue() as? UUID }
+        typing.readContext = { [weak self] in
+            guard let self, let document = self.pinyin.currentDocument(), self.view.window != nil else { return nil }
+            let proxy = self.textDocumentProxy
+            let contentType = proxy.textContentType ?? nil
+            guard proxy.isSecureTextEntry != true, proxy.autocorrectionType != .no, contentType?.rawValue.isEmpty != false,
+                  proxy.keyboardType == nil || proxy.keyboardType == .default || proxy.keyboardType == .asciiCapable,
+                  proxy.selectedText?.isEmpty != false, let before = proxy.documentContextBeforeInput else { return nil }
+            return ManualTypingContext(ticket: self.typingVisit, document: document, before: before, after: proxy.documentContextAfterInput ?? "")
+        }
+        typing.replaceSuffix = { [weak self] count, value in
+            guard let proxy = self?.textDocumentProxy else { return }
+            for _ in 0..<count { proxy.deleteBackward() }
+            if !value.isEmpty { proxy.insertText(value) }
+        }
         let keyboard = KeyboardView(
             model: viewModel,
+            typing: typing,
+            pinyin: pinyin,
             onInsert: { [weak self] text in
                 self?.textDocumentProxy.insertText(text)
+                self?.typing.refresh()
             },
             onDelete: { [weak self] in
                 self?.textDocumentProxy.deleteBackward()
+                self?.typing.refresh()
             },
             onReturn: { [weak self] in
                 self?.textDocumentProxy.insertText("\n")
