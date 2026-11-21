@@ -15,6 +15,7 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        viewModel.hostReturnIsSend = textDocumentProxy.returnKeyType == .send
         // Passive clipboard sample: one value per keyboard appearance (no background
         // monitoring possible). Requires Full Access; silently skips otherwise.
         if hasFullAccess {
@@ -48,11 +49,13 @@ final class KeyboardViewController: UIInputViewController {
 
     override func textDidChange(_ textInput: (any UITextInput)?) {
         super.textDidChange(textInput)
+        viewModel.hostReturnIsSend = textDocumentProxy.returnKeyType == .send
         typing.refresh()
     }
 
     override func selectionDidChange(_ textInput: (any UITextInput)?) {
         super.selectionDidChange(textInput)
+        viewModel.hostReturnIsSend = textDocumentProxy.returnKeyType == .send
         typing.refresh()
     }
 
@@ -87,8 +90,17 @@ final class KeyboardViewController: UIInputViewController {
                 self?.textDocumentProxy.deleteBackward()
                 self?.typing.refresh()
             },
-            onReturn: { [weak self] in
-                self?.textDocumentProxy.insertText("\n")
+            captureHostReturn: { [weak self] in
+                let document = self?.pinyin.currentDocument()
+                let type = self?.textDocumentProxy.returnKeyType
+                let visit = self?.typingVisit
+                return { [weak self] in
+                    guard let self, let document, self.view.window != nil,
+                          self.pinyin.currentDocument() == document, self.typingVisit == visit,
+                          self.textDocumentProxy.returnKeyType == type else { return }
+                    self.textDocumentProxy.insertText("\n")
+                    self.typing.refresh()
+                }
             },
             onActivateSession: { [weak self] in
                 self?.openHostAndActivateSession()

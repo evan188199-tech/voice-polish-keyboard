@@ -4,6 +4,7 @@ import UIKit
 
 @MainActor
 final class KeyboardViewModel: ObservableObject {
+    @Published var hostReturnIsSend = false
     @Published var isRecording = false
     @Published var statusText = "连接中…"
     @Published var elapsedTime: TimeInterval = 0

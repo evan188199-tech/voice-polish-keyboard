@@ -7,7 +7,7 @@ struct KeyboardView: View {
     @ObservedObject var pinyin: PinyinComposition
     let onInsert: (String) -> Void
     let onDelete: () -> Void
-    let onReturn: () -> Void
+    let captureHostReturn: () -> (@MainActor () -> Void)
     let onActivateSession: () -> Void
 
     @State private var page: KeyboardPage = .voice
@@ -626,8 +626,15 @@ struct KeyboardView: View {
 
     // MARK: - Editing row
 
+    private var returnLabel: String {
+        if page == .pinyin && !pinyin.code.isEmpty { return "选词" }
+        return model.hostReturnIsSend ? "发送" : "换行"
+    }
+
     private var editingRow: some View {
-        HStack(spacing: 6) {
+        let label = returnLabel
+        let scopedReturn = captureHostReturn()
+        return HStack(spacing: 6) {
             pageToggleButtons
                 .frame(width: 175)
 
@@ -636,9 +643,10 @@ struct KeyboardView: View {
             }
             .frame(maxWidth: .infinity)
 
-            characterKey("换行", accessibilityLabel: "换行", style: .returnKey) {
+            characterKey(label, accessibilityLabel: label, style: .returnKey) {
+                guard returnLabel == label else { return }
                 if choosePinyinIfComposing() { return }
-                requestAction(onReturn)
+                scopedReturn()
             }
             .frame(width: 64)
         }
