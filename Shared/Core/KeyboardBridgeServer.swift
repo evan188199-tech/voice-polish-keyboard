@@ -353,7 +353,7 @@ actor KeyboardBridgeServer {
             )
         case .syncClipboardHistory:
             let incoming = message.clipboardEntries ?? []
-            let visible = ClipboardMirrorStore.shared.merge(incoming)
+            let visible = await ClipboardMirrorStore.shared.merge(incoming)
             let status = await coordinator.currentStatus
             BridgeServer.send(
                 response: WireResponse(
@@ -363,7 +363,7 @@ actor KeyboardBridgeServer {
                 over: connection
             )
         case .clearClipboardHistory:
-            ClipboardMirrorStore.shared.clear()
+            await ClipboardMirrorStore.shared.clear()
             let status = await coordinator.currentStatus
             BridgeServer.send(
                 response: WireResponse(
