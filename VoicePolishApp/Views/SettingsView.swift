@@ -28,9 +28,9 @@ struct SettingsView: View {
     }
 
     private var polishModeGrid: some View {
-        let columns = [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
+        let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: PolishMode.allCases.count)
         return LazyVGrid(columns: columns, spacing: 8) {
-            ForEach(PolishMode.gridOrder, id: \.self) { mode in
+            ForEach(PolishMode.allCases, id: \.self) { mode in
                 let selected = settings.polishMode == mode
                 Button {
                     settings.polishMode = mode
@@ -84,7 +84,7 @@ struct SettingsView: View {
                         Text(settings.polishMode.settingsDescription)
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Text("键盘右侧 2×2 单选；再点当前模式可关闭润色。")
+                        Text("键盘语音页点「原文」可关闭润色。")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
@@ -190,7 +190,7 @@ struct SettingsView: View {
                 } header: {
                     Text("输入风格")
                 } footer: {
-                    Text("内置纠错、代码、自然润色与结构化提示词；可创建仅存本机的自定义整理风格。")
+                    Text("内置纠错、自然润色与结构化提示词；可创建仅存本机的自定义整理风格。")
                 }
 
 

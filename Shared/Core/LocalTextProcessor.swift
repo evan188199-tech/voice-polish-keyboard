@@ -3,7 +3,7 @@ import Foundation
 /// Runs before the optional API polisher: filler cleanup, Chinese number
 /// normalization, spoken-letter collapsing, punctuation spacing, VAD segment
 /// joining, and English casing normalization for all-caps ASR artifacts.
-/// Cloud polish (纠错/代码/润色/问答) success paths keep the LLM text as-is; this
+/// Cloud polish (纠错/润色/问答) success paths keep the LLM text as-is; this
 /// processor only shapes local ASR text that may also be fed into polish.
 enum LocalTextProcessor {
     /// Short ALL-CAPS tokens that are commonly intentional acronyms.

@@ -212,7 +212,7 @@ final class VoiceSessionCoordinator: ObservableObject {
         askFollowUpArmed = false
     }
 
-    /// Cycle: off → 纠错 → 代码 → 润色 → 问答 → off.
+    /// Cycle: off → 纠错 → 润色 → 问答 → off.
     @discardableResult
     func cyclePolishMode() -> Bool {
         guard let settings else { return false }
@@ -221,13 +221,8 @@ final class VoiceSessionCoordinator: ObservableObject {
             settings.polishMode = .correctOnly
             return true
         }
-        let order = PolishMode.cycleOrder
-        guard let idx = order.firstIndex(of: settings.polishMode) else {
-            settings.polishMode = .correctOnly
-            return true
-        }
-        if idx + 1 < order.count {
-            let next = order[idx + 1]
+        let order = PolishMode.allCases
+        if let next = order.drop(while: { $0 != settings.polishMode }).dropFirst().first {
             if settings.polishMode == .askLLM || next == .askLLM {
                 clearAskConversation()
             }
