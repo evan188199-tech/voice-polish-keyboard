@@ -23,15 +23,21 @@ final class ManualTypingUITests: XCTestCase {
     func testFullAndSogouPinyinToEnglish() throws {
         let app = try openKeyboard()
         app.buttons["切换到拼音键盘"].firstMatch.tap()
-        let scheme = app.buttons["pinyin.scheme"].firstMatch
-        scheme.tap()
-        app.buttons["全拼"].firstMatch.tap()
+        let full = app.buttons["pinyin.scheme.full"].firstMatch
+        let sogou = app.buttons["pinyin.scheme.sogou"].firstMatch
+        XCTAssertTrue(full.isHittable)
+        XCTAssertTrue(sogou.isHittable)
+        full.tap()
+        XCTAssertTrue(full.isSelected)
         let field = app.textFields["host.field"]
         for key in "nihao" { app.buttons[String(key)].firstMatch.tap() }
         app.buttons["pinyin.choice.你好"].firstMatch.tap()
         XCTAssertEqual(field.value as? String, "Alpha 你好 Omega")
-        scheme.tap()
-        app.buttons["搜狗双拼"].firstMatch.tap()
+        // Switching drops unconfirmed input, not the text already inserted.
+        app.buttons["x"].firstMatch.tap()
+        sogou.tap()
+        XCTAssertTrue(sogou.isSelected)
+        XCTAssertTrue(app.buttons["分号，韵母 ing"].firstMatch.isHittable)
         for key in ["x","分号，韵母 ing","q","分号，韵母 ing"] { app.buttons[key].firstMatch.tap() }
         let choice = app.buttons["pinyin.choice.性情"].firstMatch
         for _ in 0..<8 where !choice.exists { app.buttons["下一页候选"].firstMatch.tap() }
@@ -44,15 +50,46 @@ final class ManualTypingUITests: XCTestCase {
         app.buttons["回到语音键盘"].firstMatch.tap()
         XCTAssertTrue(app.buttons["切换到拼音键盘"].firstMatch.exists)
         XCTAssertEqual(field.value as? String, "Alpha 你好性情abc Omega")
+        app.buttons["切换到拼音键盘"].firstMatch.tap()
+        XCTAssertTrue(sogou.isSelected)
+        XCTAssertTrue(app.buttons["分号，韵母 ing"].firstMatch.isHittable)
+        app.buttons["回到语音键盘"].firstMatch.tap()
         app.buttons["发送"].firstMatch.tap()
         XCTAssertEqual(app.staticTexts["host.localSend"].label, "Alpha 你好性情abc Omega")
+    }
+
+    func testPinyinBackspaceKeepsComposingTextSeparateFromHost() throws {
+        let app = try openKeyboard()
+        app.buttons["切换到拼音键盘"].firstMatch.tap()
+        let field = app.textFields["host.field"]
+        let backspace = app.buttons["pinyin.backspace"].firstMatch
+
+        for scheme in ["pinyin.scheme.full", "pinyin.scheme.sogou"] {
+            app.buttons[scheme].firstMatch.tap()
+            XCTAssertTrue(backspace.isHittable)
+            XCTAssertGreaterThanOrEqual(backspace.frame.width, 44)
+            XCTAssertGreaterThan(backspace.frame.midX, app.buttons["m"].firstMatch.frame.midX)
+        }
+
+        for key in ["x", "分号，韵母 ing", "q", "分号，韵母 ing"] {
+            app.buttons[key].firstMatch.tap()
+        }
+        backspace.tap()
+        XCTAssertEqual(app.staticTexts["pinyin.code"].firstMatch.label, "x;q")
+        XCTAssertEqual(field.value as? String, "Alpha Alice Omega")
+
+        app.buttons["清除拼音编码"].firstMatch.tap()
+        app.buttons["pinyin.scheme.full"].firstMatch.tap()
+        for key in "nihao" { app.buttons[String(key)].firstMatch.tap() }
+        app.buttons["pinyin.choice.你好"].firstMatch.tap()
+        backspace.tap()
+        XCTAssertEqual(field.value as? String, "Alpha 你 Omega")
     }
 
     func testInitialsPreserveUnselectedSuffix() throws {
         let app = try openKeyboard()
         app.buttons["切换到拼音键盘"].firstMatch.tap()
-        app.buttons["pinyin.scheme"].firstMatch.tap()
-        app.buttons["全拼"].firstMatch.tap()
+        app.buttons["pinyin.scheme.full"].firstMatch.tap()
         let field = app.textFields["host.field"]
         for key in "dzjwqm" { app.buttons[String(key)].firstMatch.tap() }
         let candidate = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'pinyin.choice.'")).firstMatch
