@@ -105,9 +105,9 @@ struct KeyboardView: View {
             voiceStatusRow
                 .frame(maxWidth: .infinity)
             modeChips
-                .frame(width: 180, height: 32)
+                .frame(width: 188, height: 44)
         }
-        .frame(height: 32)
+        .frame(height: 44)
     }
 
     private var voiceStatusRow: some View {
@@ -125,12 +125,6 @@ struct KeyboardView: View {
                     Text(formatTime(model.elapsedTime))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
-                }
-                if !model.polishEnabled {
-                    Text("润色关")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.tertiary)
-                        .fixedSize()
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -358,9 +352,8 @@ struct KeyboardView: View {
     private var micGesture: some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
-                if !pressed && !model.isRecording {
+                if !pressed && model.noteHoldBegan() {
                     pressed = true
-                    model.noteHoldBegan()
                     Task { await model.onPressDown() }
                 }
                 if pressed || model.isRecording {
@@ -411,32 +404,33 @@ struct KeyboardView: View {
     // MARK: - Mode chips
 
     private var modeChips: some View {
-        return HStack(spacing: 4) {
-            ForEach(PolishMode.gridOrder, id: \.self) { mode in
+        HStack(spacing: 4) {
+            modeCell(nil)
+            ForEach(PolishMode.allCases, id: \.self) { mode in
                 modeCell(mode)
             }
         }
-        .disabled(!model.isConnected || model.isRecording)
+        .disabled(!model.isConnected || model.isRecording || model.isChangingPolishMode)
         .opacity((!model.isConnected || model.isRecording) ? 0.45 : 1)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("处理模式")
     }
 
-    private func modeCell(_ mode: PolishMode) -> some View {
-        let selected = model.polishEnabled && model.polishMode == mode
+    private func modeCell(_ mode: PolishMode?) -> some View {
+        let selected = mode == (model.polishEnabled ? model.polishMode : nil)
         return Button {
-            Task { await model.selectPolishMode(mode) }
+            model.selectPolishMode(mode)
         } label: {
-            HStack(spacing: 3) {
-                Image(systemName: mode.symbolName)
-                    .font(.system(size: 11, weight: .semibold))
-                Text(mode.shortLabel)
+            HStack(spacing: 2) {
+                Image(systemName: mode?.symbolName ?? "text.alignleft")
+                    .font(.system(size: 10, weight: .semibold))
+                Text(mode?.shortLabel ?? "原文")
                     .font(.caption2.weight(.semibold))
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 3)
             .background(
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
                     .fill(selected ? Color.orange.opacity(0.20) : Color.primary.opacity(0.06))
@@ -445,12 +439,15 @@ struct KeyboardView: View {
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
                     .strokeBorder(selected ? Color.orange.opacity(0.70) : Color.clear, lineWidth: 1.2)
             )
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
             .foregroundStyle(selected ? Color.orange : Color.primary.opacity(0.75))
         }
         .buttonStyle(KeyboardPressButtonStyle())
-        .accessibilityLabel(mode.displayName)
+        .accessibilityLabel(mode?.displayName ?? "原文")
+        .accessibilityIdentifier("voice.mode." + (mode?.rawValue ?? "original"))
         .accessibilityAddTraits(selected ? .isSelected : [])
-        .accessibilityHint(selected ? "再次点击关闭润色" : "选择此模式")
+        .accessibilityHint(mode == nil ? "关闭润色，仅本地转写" : "开启并使用此模式")
     }
 
     // MARK: - ABC (QWERTY) page

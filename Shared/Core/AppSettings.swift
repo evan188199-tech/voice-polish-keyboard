@@ -177,8 +177,8 @@ final class AppSettings: ObservableObject {
             clipboardHistoryEnabled = defaults.bool(forKey: "clipboard_history_enabled")
         }
 
-        loadOrMigrateProfiles(defaults: defaults)
         loadOrMigrateStyles(defaults: defaults)
+        loadOrMigrateProfiles(defaults: defaults)
         isLoaded = true
     }
 
@@ -385,7 +385,6 @@ final class AppSettings: ObservableObject {
     private func builtinStyleID(for mode: PolishMode) -> String {
         switch mode {
         case .correctOnly: return "builtin.correct"
-        case .coding: return "builtin.coding"
         case .rewrite, .askLLM: return "builtin.rewrite"
         }
     }

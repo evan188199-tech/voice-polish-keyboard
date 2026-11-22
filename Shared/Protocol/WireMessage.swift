@@ -10,7 +10,7 @@ enum BridgeCommand: String, Codable, Sendable {
     case setPolishEnabled
     /// Set polish mode raw value (`correctOnly` / `coding` / `rewrite` / `askLLM`).
     case setPolishMode
-    /// Cycle: off → 纠错 → 代码 → 润色 → 问答 → off.
+    /// Cycle: off → 纠错 → 润色 → 问答 → off.
     case cyclePolishMode
     /// Set Chinese script preference raw value (`simplified` / `traditionalHK`).
     case setChineseScript

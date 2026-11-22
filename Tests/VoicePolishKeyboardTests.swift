@@ -435,12 +435,12 @@ final class VoicePolishKeyboardTests: XCTestCase {
         let message = WireMessage(
             command: .setPolishMode,
             token: "test",
-            polishMode: PolishMode.coding.rawValue
+            polishMode: PolishMode.correctOnly.rawValue
         )
         let data = try JSONEncoder().encode(message)
         let decoded = try JSONDecoder().decode(WireMessage.self, from: data)
         XCTAssertEqual(decoded.command, .setPolishMode)
-        XCTAssertEqual(decoded.polishMode, PolishMode.coding.rawValue)
+        XCTAssertEqual(decoded.polishMode, PolishMode.correctOnly.rawValue)
         XCTAssertNil(decoded.polishEnabled)
     }
 
@@ -454,21 +454,19 @@ final class VoicePolishKeyboardTests: XCTestCase {
     func testPolishModeDefaultAndLabels() {
         XCTAssertEqual(PolishMode.default, .rewrite)
         XCTAssertEqual(PolishMode.correctOnly.shortLabel, "纠错")
-        XCTAssertEqual(PolishMode.coding.shortLabel, "代码")
         XCTAssertEqual(PolishMode.rewrite.shortLabel, "润色")
         XCTAssertEqual(PolishMode.askLLM.shortLabel, "问答")
-        XCTAssertEqual(PolishMode.cycleOrder.count, 4)
+        XCTAssertEqual(PolishMode.allCases, [.correctOnly, .rewrite, .askLLM])
+        XCTAssertNil(PolishMode.fromWire("coding"))
         XCTAssertEqual(PolishMode.fromWire("askLLM"), .askLLM)
         XCTAssertNil(PolishMode.fromWire("nope"))
     }
 
     func testPolishModeSystemPromptsDiffer() {
         let correct = APITextPolisher.systemPrompt(for: .correctOnly)
-        let coding = APITextPolisher.systemPrompt(for: .coding)
         let rewrite = APITextPolisher.systemPrompt(for: .rewrite)
         let ask = APITextPolisher.systemPrompt(for: .askLLM)
         XCTAssertTrue(correct.contains("纠错") || correct.contains("识别错误"))
-        XCTAssertTrue(coding.contains("编程") || coding.contains("标识符"))
         XCTAssertTrue(rewrite.contains("不要回答问题"))
         XCTAssertTrue(ask.contains("answer") || ask.contains("回复"))
         XCTAssertTrue(ask.contains("对方") || ask.contains("发送"))
@@ -501,14 +499,51 @@ final class VoicePolishKeyboardTests: XCTestCase {
         XCTAssertEqual(reloaded.polishMode, .askLLM)
     }
 
+    func testLegacyCodingSettingsKeepDisabledStateAndCustomStyles() throws {
+        let defaults = UserDefaults.standard
+        let keys = ["polish_mode", "polish_enabled", "active_style_profile_id", "style_profiles_v1"]
+        let previous = keys.map { ($0, defaults.object(forKey: $0)) }
+        defer {
+            for (key, value) in previous { defaults.set(value, forKey: key) }
+        }
+
+        defaults.set("coding", forKey: "polish_mode")
+        defaults.set(false, forKey: "polish_enabled")
+        defaults.set("builtin.coding", forKey: "active_style_profile_id")
+        defaults.set(Data("""
+            [{"id":"saved","name":"简明","mode":"coding","customSystemPrompt":"保留标题","isBuiltin":false}]
+            """.utf8), forKey: "style_profiles_v1")
+
+        let settings = AppSettings()
+        XCTAssertFalse(settings.polishEnabled)
+        XCTAssertEqual(settings.polishMode, .rewrite)
+        XCTAssertEqual(settings.activeStyleProfileID, "builtin.rewrite")
+        let savedStyle = try XCTUnwrap(settings.styleProfiles.first { $0.id == "saved" })
+        XCTAssertEqual(savedStyle.mode, .rewrite)
+        XCTAssertEqual(savedStyle.customSystemPrompt, "保留标题")
+        XCTAssertFalse(settings.styleProfiles.contains { $0.id == "builtin.coding" })
+    }
+
+    func testLegacyCodingHistoryKeepsTranscriptAndResult() throws {
+        let data = Data("""
+            [{"id":"2CF04663-4FC8-4FF9-8A77-F714E2F8CA8F","createdAt":0,
+              "transcript":"识别原文","result":"处理结果","mode":"coding"}]
+            """.utf8)
+        let entries = try JSONDecoder().decode([DictationHistoryEntry].self, from: data)
+        let entry = try XCTUnwrap(entries.first)
+        XCTAssertEqual(entry.transcript, "识别原文")
+        XCTAssertEqual(entry.result, "处理结果")
+        XCTAssertEqual(entry.mode, .rewrite)
+    }
+
     func testPolishSettingsCarriesMode() {
         let settings = PolishingSettings(
             baseURL: "https://api.openai.com",
             modelName: "gpt-4o-mini",
             apiKey: "sk-test",
-            mode: .coding
+            mode: .correctOnly
         )
-        XCTAssertEqual(settings.mode, .coding)
+        XCTAssertEqual(settings.mode, .correctOnly)
         XCTAssertEqual(settings.mode.temperature, 0.2, accuracy: 0.0001)
     }
 
@@ -541,9 +576,7 @@ final class VoicePolishKeyboardTests: XCTestCase {
         XCTAssertEqual(settings.polishMode, .correctOnly)
         XCTAssertEqual(coordinator.polishStateSummary, "纠错")
 
-        // correctOnly → coding → rewrite → askLLM
-        XCTAssertTrue(coordinator.cyclePolishMode())
-        XCTAssertEqual(settings.polishMode, .coding)
+        // correctOnly → rewrite → askLLM
         XCTAssertTrue(coordinator.cyclePolishMode())
         XCTAssertEqual(settings.polishMode, .rewrite)
         XCTAssertTrue(coordinator.cyclePolishMode())
@@ -719,7 +752,7 @@ final class VoicePolishKeyboardTests: XCTestCase {
     func testReadyPhaseStatusTextIsReady() {
         let msg = VoiceJobStatusText.processingMessage(
             phase: .ready,
-            polishMode: .coding,
+            polishMode: .correctOnly,
             pendingCount: 1
         )
         XCTAssertEqual(msg, "就绪")

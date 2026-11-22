@@ -3,25 +3,27 @@ import Foundation
 /// Fixed polish / post-process modes for the optional LLM step.
 enum PolishMode: String, Codable, CaseIterable, Sendable, Equatable, Hashable {
     case correctOnly
-    case coding
     case rewrite
     case askLLM
 
     static let `default`: PolishMode = .rewrite
 
-    /// Cycle order when polish is enabled: 纠错 → 代码 → 润色 → 问答.
-    /// Kept for bridge `cyclePolishMode` compatibility.
-    static let cycleOrder: [PolishMode] = [.correctOnly, .coding, .rewrite, .askLLM]
-
-    /// 2×2 grid layout order (row-major):
-    /// 纠错 | 代码
-    /// 润色 | 问答
-    static let gridOrder: [PolishMode] = [.correctOnly, .coding, .rewrite, .askLLM]
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let raw = try container.decode(String.self)
+        // Preserve saved styles and dictation history from earlier builds.
+        if raw == "coding" {
+            self = .rewrite
+        } else if let mode = Self(rawValue: raw) {
+            self = mode
+        } else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown polish mode")
+        }
+    }
 
     var symbolName: String {
         switch self {
         case .correctOnly: return "checkmark.circle"
-        case .coding: return "chevron.left.forwardslash.chevron.right"
         case .rewrite: return "wand.and.stars"
         case .askLLM: return "bubble.left.and.bubble.right"
         }
@@ -30,7 +32,6 @@ enum PolishMode: String, Codable, CaseIterable, Sendable, Equatable, Hashable {
     var displayName: String {
         switch self {
         case .correctOnly: return "只纠错"
-        case .coding: return "Coding"
         case .rewrite: return "润色词句"
         case .askLLM: return "问 LLM"
         }
@@ -40,7 +41,6 @@ enum PolishMode: String, Codable, CaseIterable, Sendable, Equatable, Hashable {
     var shortLabel: String {
         switch self {
         case .correctOnly: return "纠错"
-        case .coding: return "代码"
         case .rewrite: return "润色"
         case .askLLM: return "问答"
         }
@@ -50,8 +50,6 @@ enum PolishMode: String, Codable, CaseIterable, Sendable, Equatable, Hashable {
         switch self {
         case .correctOnly:
             return "只修识别错误与标点，尽量不改写。"
-        case .coding:
-            return "整理编程口语，保留标识符与路径，便于粘贴。"
         case .rewrite:
             return "去口头语、理顺语句，不回答问题。"
         case .askLLM:
@@ -87,17 +85,6 @@ enum PolishMode: String, Codable, CaseIterable, Sendable, Equatable, Hashable {
             5. 保留英文术语、专有名词、代码标识与产品名，不得翻译。
             6. 原文中英粤混合时，输出保持相同混合方式。
             7. 只输出正文，不要解释、前缀或引号包裹。
-            """
-        case .coding:
-            return """
-            你是面向编程场景的语音转写整理助手。你整理口语转写，便于粘贴到编辑器或技术对话。
-            规则：
-            1. 不要回答与原文无关的问题；不要编造原文未提到的代码、API 或文件。
-            2. 删除口头填充词、重复和错误停顿。
-            3. 保留并尽量准确还原标识符、路径、命令、函数名、类型名、仓库名与代码 token 的大小写与符号。
-            4. 可对列表、步骤做轻量结构化（换行/编号），但不得改变原意。
-            5. 保留粤语书面语与中英粤混合方式；英文术语不得擅自翻译。
-            6. 只输出整理后的文本，不要解释或前缀。
             """
         case .rewrite:
             return """

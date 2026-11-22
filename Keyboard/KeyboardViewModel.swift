@@ -23,6 +23,7 @@ final class KeyboardViewModel: ObservableObject {
     }
     /// Optional polish toggle mirrored from the host app via bridge.
     @Published var polishEnabled = true
+    @Published private(set) var isChangingPolishMode = false
     /// Active polish mode mirrored from host app.
     @Published var polishMode: PolishMode = .default
     /// Chinese script preference mirrored from host app.
@@ -102,9 +103,10 @@ final class KeyboardViewModel: ObservableObject {
     // MARK: - BiBi-style hold-to-record
 
     /// Call synchronously from the gesture before kicking off `onPressDown()`.
-    func noteHoldBegan() {
-        guard !isRecording else { return }
+    func noteHoldBegan() -> Bool {
+        guard !isRecording, !isChangingPolishMode else { return false }
         holdStartState = .scheduled
+        return true
     }
 
     func onPressDown() async {
@@ -279,10 +281,6 @@ final class KeyboardViewModel: ObservableObject {
         return isRecording
     }
 
-    func togglePolishEnabled() async {
-        await setPolishEnabled(!polishEnabled)
-    }
-
     func toggleChineseScript() async {
         await setChineseScript(chineseScript == .simplified ? .traditionalHK : .simplified)
     }
@@ -319,84 +317,45 @@ final class KeyboardViewModel: ObservableObject {
         }
     }
 
-    /// Select a mode (enables polish). Tapping the active mode again turns polish off.
-    func selectPolishMode(_ mode: PolishMode) async {
-        guard !isRecording else { return }
-        if polishEnabled, polishMode == mode {
-            await setPolishEnabled(false)
-            return
-        }
-        await setPolishMode(mode)
-    }
-
-    func setPolishMode(_ mode: PolishMode) async {
-        guard !isRecording else { return }
-        if !isConnected {
-            await connect()
-            guard isConnected else { return }
-        }
-        do {
-            let response = try await client.send(.setPolishMode, polishMode: mode.rawValue)
-            switch response.response.outcome {
-            case .ok:
-                if let status = response.response.status {
-                    currentState = status.state
-                    applyPolishFlag(from: status)
-                    applyAskFollowUpFlags(from: status)
+    /// A nil mode selects local transcription only.
+    func selectPolishMode(_ mode: PolishMode?) {
+        guard isConnected, !isRecording, holdStartState == .idle, !isChangingPolishMode,
+              mode != (polishEnabled ? polishMode : nil) else { return }
+        isChangingPolishMode = true
+        Task {
+            defer { isChangingPolishMode = false }
+            do {
+                let response: WireResponse
+                if let mode {
+                    response = try await client.send(.setPolishMode, polishMode: mode.rawValue)
                 } else {
-                    polishEnabled = true
-                    polishMode = mode
-                    askFollowUpAvailable = false
-                    askFollowUpArmed = false
+                    response = try await client.send(.setPolishEnabled, polishEnabled: false)
                 }
-                if !isRecording, !isBusy {
-                    statusText = response.response.message ?? readyPrompt
-                }
-            case .error, .unauthorized:
-                statusText = response.response.message ?? "模式切换失败"
-            case .text:
-                break
-            }
-        } catch {
-            isConnected = false
-            currentState = .inactive
-            statusText = "请打开主应用并启动语音会话"
-        }
-    }
-
-    func setPolishEnabled(_ enabled: Bool) async {
-        guard !isRecording else { return }
-        if !isConnected {
-            await connect()
-            guard isConnected else { return }
-        }
-        do {
-            let response = try await client.send(.setPolishEnabled, polishEnabled: enabled)
-            switch response.response.outcome {
-            case .ok:
-                if let status = response.response.status {
-                    currentState = status.state
-                    applyPolishFlag(from: status)
-                    applyAskFollowUpFlags(from: status)
-                } else {
-                    polishEnabled = enabled
-                    if !enabled {
+                switch response.response.outcome {
+                case .ok:
+                    if let status = response.response.status {
+                        currentState = status.state
+                        applyPolishFlag(from: status)
+                        applyAskFollowUpFlags(from: status)
+                    } else {
+                        polishEnabled = mode != nil
+                        if let mode { polishMode = mode }
                         askFollowUpAvailable = false
                         askFollowUpArmed = false
                     }
+                    if !isBusy {
+                        statusText = response.response.message ?? readyPrompt
+                    }
+                case .error, .unauthorized:
+                    statusText = response.response.message ?? "模式切换失败"
+                case .text:
+                    break
                 }
-                if !isRecording, !isBusy {
-                    statusText = response.response.message ?? readyPrompt
-                }
-            case .error, .unauthorized:
-                statusText = response.response.message ?? "润色开关失败"
-            case .text:
-                break
+            } catch {
+                isConnected = false
+                currentState = .inactive
+                statusText = "请打开主应用并启动语音会话"
             }
-        } catch {
-            isConnected = false
-            currentState = .inactive
-            statusText = "请打开主应用并启动语音会话"
         }
     }
 
