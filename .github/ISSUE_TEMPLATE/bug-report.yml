@@ -1,0 +1,45 @@
+name: 报告问题
+description: 反馈语音输入、润色或键盘使用中的问题。
+title: "[问题] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提交后内容公开。请使用合成示例，不要附上真实语音、聊天记录、联系方式、设备序列号或 API Key。若已有相同 Issue，可先在原帖补充你的复现情况。
+  - type: input
+    id: app-version
+    attributes:
+      label: App 版本和构建号
+      description: 在主 App「设置 → 反馈与进度」查看。
+      placeholder: "例如：v0.2.26 (123)"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: 设备型号和系统版本
+      placeholder: "例如：iPhone 16e，iOS 26"
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 如何复现
+      description: 从哪个入口开始、做了什么、是否每次都会发生？
+    validations:
+      required: true
+  - type: textarea
+    id: results
+    attributes:
+      label: 实际结果和预期结果
+      description: 可用不含隐私的例句说明。
+    validations:
+      required: true
+  - type: dropdown
+    id: impact
+    attributes:
+      label: 影响程度
+      options:
+        - 无法使用或输入丢失
+        - 功能仍可用，但明显受影响
+        - 轻微问题
+    validations:
+      required: true
